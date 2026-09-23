@@ -52,9 +52,10 @@ SOURCES = {
         'sheet_id': '1Txws1Qan9QVyR3qJTlup5BadQ9KwI6qk84KQb8bMbEQ',
         'table': 'zepto_grn',
         'platform': 'Zepto',
-        'tabs': None,            # None = every tab; or a list of tab names
+        'tabs': ['Sheet1'],      # 2026-09-23: a scratch 'Sheet2' (SKU name list) appeared and broke the load
         'header_row': 1,
         'columns': {},           # filled after --discover once the sheet is shared with the loader account
+        'line_key': ('po_no', 'sku'),   # status moves PENDING_GRN -> COMPLETED in place; the current version wins
         # 2026-09-21: the sheet lacked almost every qty >= 100 PO line up to Jun-2026, so those 4,285 lines were backfilled
         # from the portal PO export in Drive "6) PO Data/Zepto PO Data" (drive_file_id below). The sheet wins: once it
         # carries the same PO x SKU, the backfilled row is deleted, so a re-export can never double-count a receipt.
@@ -72,6 +73,10 @@ SOURCES = {
             'amountshortage': ('amount_shortage', 'numeric'), 'pricediscrepancyamount': ('price_discrepancy_amount', 'numeric'), 'amazonpaidcost': ('amazon_paid_cost', 'numeric'),
             'externalid': ('external_id', 'text'), 'ponumber': ('po_number', 'text'), 'count': ('row_count', 'numeric'), 'date': ('report_date', 'text'),
         },
+        # Amazon rewrites a line in place (Confirmed -> Closed, received qty filled in), which lands as a new row_hash.
+        # The sheet's current version of an invoice x PO x ASIN line wins; older stored versions of it are deleted.
+        # Lines that have left the sheet are kept.
+        'line_key': ('invoice_number', 'po_number', 'asin'),
     },
 }
 BASE_COLUMNS = [  # every table gets these
@@ -85,6 +90,7 @@ BASE_COLUMNS = [  # every table gets these
     ('created_at', 'timestamptz not null default now()'),
 ]
 PAGE = 10000
+current_hashes: set[str] = set()   # row_hash of every row in the sheet as read this run
 
 
 # ------------------------------------------------------------------ helpers
@@ -249,6 +255,7 @@ def load(src, tab, title, headers, rows, conn, dry_run):
         if row[0] in seen: continue
         seen.add(row[0]); uniq.append(row)
     log.info("%s / %s: %d sheet rows, %d distinct", title, tab, len(out), len(uniq))
+    current_hashes.update(row[0] for row in uniq)
     if dry_run or not uniq: return 0
     names = ['row_hash', 'source_file', 'drive_file_id', 'sheet_row', 'raw_data'] + cols
     sql = f"insert into public.{src['table']} ({', '.join(names)}) values %s on conflict (row_hash) do nothing returning 1"
@@ -272,6 +279,26 @@ def drop_superseded_backfill(src, conn):
         n = cur.rowcount
     conn.commit()
     if n: log.info('%s: %d backfilled rows superseded by the sheet, deleted', src['table'], n)
+
+
+def drop_superseded_versions(src, conn, hashes):
+    """Delete stored rows of this sheet that are no longer in it, when the sheet still carries their line_key."""
+    key = src['line_key']
+    cols = ', '.join(f"coalesce(c.{k}, '') as k{i}" for i, k in enumerate(key))
+    on =' and '.join(f"coalesce(o.{k}, '') = l.k{i}" for i, k in enumerate(key))   # plain equality so it hash-joins
+    with conn.cursor() as cur:
+        cur.execute("set statement_timeout = '900000'")
+        cur.execute('create temp table cur_hash (row_hash text primary key) on commit drop')
+        execute_values(cur, 'insert into cur_hash values %s', [(h,) for h in hashes], page_size=5000)
+        cur.execute('analyze cur_hash')
+        cur.execute(f"with l as (select distinct {cols} "
+                    f"           from public.{src['table']} c join cur_hash h on h.row_hash = c.row_hash) "
+                    f"delete from public.{src['table']} o using l where o.drive_file_id = %s and {on} "
+                    f"and not exists (select 1 from cur_hash h where h.row_hash = o.row_hash)",
+                    (src['sheet_id'],))
+        n = cur.rowcount
+    conn.commit()
+    if n: log.info('%s: %d older versions of lines the sheet has since rewritten, deleted', src['table'], n)
 
 
 def log_run(conn, source, status, rows, msg='', started=None):
@@ -339,6 +366,8 @@ def main():
         log.info('%s: %d new rows written', src['table'], total)
         if src.get('superseded_backfill') and not a.dry_run and not a.tab:
             drop_superseded_backfill(src, conn)
+        if src.get('line_key') and not a.dry_run and not a.tab and current_hashes:
+            drop_superseded_versions(src, conn, current_hashes)
         log_run(conn, a.source, 'OK', total, f'{title}: tabs {tabs}', started)
     except Exception as e:
         log_run(conn, a.source, 'ERROR', total, str(e), started); raise
