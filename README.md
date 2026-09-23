@@ -54,3 +54,19 @@ FY27 PO with nothing billed against it, from `warehouse.fill_rate_lines` (the tr
 `never_billed` job rewrites both tabs after every load (3-hourly); row 1 says when, row 2 is the totals.
 `--create` made the sheet once (owner: the loader's Google account, birbal@ as writer); share it wider from
 the sheet's own Share dialog. Runs log to `workflow_logs` as `sheet_grn:never_billed`.
+
+## Sales targets (`targets_loader.py`, 2026-09-23)
+
+Loads `warehouse.sales_targets` for Birbal's Primary Sales board (migration 102) on the same 3-hourly
+beat (`targets` job):
+
+* **Marketplace** -- every "Target Planning <Month> - <Year>" sheet from April 2026 (found in Drive by
+  name; tab `Target`, header row 3): `QTY TGT` and `T - Net Sales` per location x SKU, folded to month x
+  party x category (`source='target'`) and kept per SKU (`source='target_sku'`).
+* **Trade** -- finance's "Management MIS FY27" sheet, tab `YTD Channelwise`, row `Net Sales`: the Target
+  block's Trade column (`source='target'`), Marketplace (`mis`), the Trade sub-channels (`mis_sub`) and the
+  AOP Target block (`aop`). This sheet must be shared with the loader's account (or a token that can open
+  it stored as `GOOGLE_TOKEN_JSON_TRADE_B64`); until then the Trade step fails on its own and says whom to
+  share with.
+
+`python targets_loader.py --dry-run` parses both and writes nothing.

@@ -59,3 +59,35 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           GOOGLE_TOKEN_JSON: token.json
         run: python never_billed_sheet.py
+
+  # Sales targets for the Primary Sales board (Birbal migration 102): the marketing team's monthly
+  # "Target Planning <Month> - <Year>" sheets (Marketplace, party x category) and finance's
+  # "Management MIS FY27" sheet (Trade, channel level). Each half replaces only the months it read.
+  targets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Restore the Google tokens
+        run: |
+          echo "${{ secrets.GOOGLE_TOKEN_JSON_B64 }}" | base64 -d > token.json
+          # the MIS sheet opens with finance's share; a separate token only if one was stored
+          if [ -n "${{ secrets.GOOGLE_TOKEN_JSON_TRADE_B64 }}" ]; then echo "${{ secrets.GOOGLE_TOKEN_JSON_TRADE_B64 }}" | base64 -d > token_trade.json; else cp token.json token_trade.json; fi
+      - name: Marketplace targets
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          GOOGLE_TOKEN_JSON: token.json
+        run: python targets_loader.py --source marketplace
+      - name: Trade targets
+        # red until the MIS sheet is shared with the loader's account (or GOOGLE_TOKEN_JSON_TRADE_B64 is set);
+        # the Marketplace half does not depend on it
+        continue-on-error: true
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          GOOGLE_TOKEN_JSON: token.json
+          GOOGLE_TOKEN_JSON_TRADE: token_trade.json
+        run: python targets_loader.py --source trade
