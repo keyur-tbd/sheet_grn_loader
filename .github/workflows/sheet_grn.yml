@@ -1,0 +1,40 @@
+name: sheet-grn-loader
+
+on:
+  schedule:
+    - cron: '17 */3 * * *'    # every 3 hours (off the hour; GitHub crons can start hours late)
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'zepto | amazon | all'
+        default: 'all'
+
+# a late scheduled run must not overlap the next one
+concurrency:
+  group: sheet-grn-loader
+  cancel-in-progress: false
+
+# The order-to-cash bridge is NOT refreshed here: o2c_refresh runs on pg_cron at 09:00 and 14:00 IST
+# (bc-supabase-sync/o2c/pg_cron_schedule.sql) and deadlocks when a second refresh runs alongside it.
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        source: ${{ fromJSON((github.event.inputs.source == '' || github.event.inputs.source == 'all') && '["zepto","amazon"]' || format('["{0}"]', github.event.inputs.source)) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Restore the Google token
+        run: echo "${{ secrets.GOOGLE_TOKEN_JSON_B64 }}" | base64 -d > token.json
+      - name: Load ${{ matrix.source }}
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}     # session pooler host (IPv4); sslmode=require is fine on runners
+          GOOGLE_TOKEN_JSON: token.json
+        run: python sheet_grn_loader.py --source ${{ matrix.source }}
