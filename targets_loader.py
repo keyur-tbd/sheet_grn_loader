@@ -279,6 +279,17 @@ def trade_rows(c):
         else:
             continue
         months.add(month)
+    # the tab repeats some blocks (the same AOP column twice): keep one row per key. A zero is a month
+    # finance has not set yet (Trade reads 0 from Sep-26 on), not a target of nothing, so it is left out.
+    seen, dedup = set(), []
+    for r in out:
+        key = (r[0], r[1], r[2], r[6], r[8])
+        if key in seen or not r[7]:
+            continue
+        seen.add(key)
+        dedup.append(r)
+    out = dedup
+    months = {r[0] for r in out}
     log.info('MIS FY27: %d rows over %d months (%s)', len(out), len(months), ', '.join(m.strftime('%b-%y') for m in sorted(months)))
     return out, months
 
