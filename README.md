@@ -34,10 +34,14 @@ Secrets: `SUPABASE_DB_URL` (session pooler host, runners are IPv4 only) and `GOO
 
 - Cells are read with `valueRenderOption=UNFORMATTED_VALUE`, so long identifiers never arrive as `3.23E+12`
   (the sheet's CSV export is lossy — do not backfill from a CSV).
-- `row_hash` = sha256(sheet id | tab | canonical row JSON). Re-reading the sheet writes nothing new;
-  a row edited in the sheet lands as a new row. After each full load, older stored versions of a line the sheet still
-  carries are deleted (`line_key`: Amazon invoice x PO x ASIN, Zepto PO x SKU), so the table holds the sheet's current
-  version of every line. Lines that have left the sheet are kept.
+- **Upsert on the line key** (`line_key`: Amazon PO x ASIN, since the sheet's Invoice Number is always blank;
+  Zepto PO x SKU), backed by a unique index `<table>_line_key_uidx` the loader creates if missing:
+  - a line in the sheet and in Supabase is replaced by the sheet's version (same `id` and `created_at`, new
+    `processed_at`); an unchanged line (same `row_hash`) is not touched;
+  - a line only in the sheet is inserted;
+  - a line only in Supabase (history the sheet no longer carries) is kept as it is.
+- If a key appears on two sheet rows the load stops with an error rather than silently keep one of them.
+- `row_hash` = sha256(sheet id | tab | canonical row JSON), used to skip unchanged lines.
 - `raw_data` keeps the untouched row; `source_file` = "<sheet title> / <tab>", `drive_file_id` = sheet id,
   `sheet_row` = row number at load time.
 - Runs are logged to `public.workflow_logs` with `source = sheet_grn:<source>` when that table exists.
