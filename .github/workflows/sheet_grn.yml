@@ -38,3 +38,24 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}     # session pooler host (IPv4); sslmode=require is fine on runners
           GOOGLE_TOKEN_JSON: token.json
         run: python sheet_grn_loader.py --source ${{ matrix.source }}
+
+  # The never-billed PO list as a Google Sheet for the SCM team (Birbal SCM Tracker, Pending POs view
+  # links to it). Runs after the loads on the same 3-hourly beat; reads the SCM Tracker's own snapshot.
+  never_billed:
+    needs: load
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Restore the Google token
+        run: echo "${{ secrets.GOOGLE_TOKEN_JSON_B64 }}" | base64 -d > token.json
+      - name: Rewrite the never-billed POs sheet
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          GOOGLE_TOKEN_JSON: token.json
+        run: python never_billed_sheet.py

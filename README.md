@@ -45,3 +45,12 @@ Secrets: `SUPABASE_DB_URL` (session pooler host, runners are IPv4 only) and `GOO
 - `raw_data` keeps the untouched row; `source_file` = "<sheet title> / <tab>", `drive_file_id` = sheet id,
   `sheet_row` = row number at load time.
 - Runs are logged to `public.workflow_logs` with `source = sheet_grn:<source>` when that table exists.
+
+## Never-billed POs sheet (`never_billed_sheet.py`, 2026-09-23)
+
+The Birbal SCM Tracker's pending-PO list as a Google Sheet for the SCM team: "Birbal - Never billed POs"
+(`18oXNb4bHhQ-ealzgcLysEd0EAyzGKBjOHxUDhSvcY7I`, tabs *Never billed* and *Reversed by credit memo*), one row per
+FY27 PO with nothing billed against it, from `warehouse.fill_rate_lines` (the tracker's own snapshot). The
+`never_billed` job rewrites both tabs after every load (3-hourly); row 1 says when, row 2 is the totals.
+`--create` made the sheet once (owner: the loader's Google account, birbal@ as writer); share it wider from
+the sheet's own Share dialog. Runs log to `workflow_logs` as `sheet_grn:never_billed`.
