@@ -35,7 +35,9 @@ Secrets: `SUPABASE_DB_URL` (session pooler host, runners are IPv4 only) and `GOO
 - Cells are read with `valueRenderOption=UNFORMATTED_VALUE`, so long identifiers never arrive as `3.23E+12`
   (the sheet's CSV export is lossy — do not backfill from a CSV).
 - `row_hash` = sha256(sheet id | tab | canonical row JSON). Re-reading the sheet writes nothing new;
-  a row edited in the sheet lands as a new row (the old one stays), same as the other GRN loaders.
+  a row edited in the sheet lands as a new row. After each full load, older stored versions of a line the sheet still
+  carries are deleted (`line_key`: Amazon invoice x PO x ASIN, Zepto PO x SKU), so the table holds the sheet's current
+  version of every line. Lines that have left the sheet are kept.
 - `raw_data` keeps the untouched row; `source_file` = "<sheet title> / <tab>", `drive_file_id` = sheet id,
   `sheet_row` = row number at load time.
 - Runs are logged to `public.workflow_logs` with `source = sheet_grn:<source>` when that table exists.
