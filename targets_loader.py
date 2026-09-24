@@ -14,6 +14,9 @@ Two sources, two owners, two grains (2026-09-23, "Changes in Birbal_2" item 16):
   month's net-sales target for that line, ex-GST after returns). Loaded at two grains:
     source='target'      month x party x category           (units + value)  <- the boards read this
     source='target_sku'  month x party x category x SKU     (units + value)  <- for Ask / SQL
+* DETAIL -- the same Target tab line by line (customer location x SKU) with the whole target ladder
+  (qty, MRP billing ... net sales, COGS, GM, CM1, ads, CM2, CM3) -> warehouse.sales_targets_detail, then
+  app.refresh_target_vs_actual() rebuilds warehouse.target_vs_actual (Birbal migration 107).
 * TRADE -- finance's "Management MIS FY27" sheet, tab `YTD Channelwise`: P&L lines x channel in
   AOP / Target / Actual blocks per month. Only `Net Sales` is taken, from the `Target` block as
   source='target' (channel_group Trade; also Marketplace as source='mis', finance's own number for
@@ -69,6 +72,16 @@ PARTY = {
     'FLIPKART MINUTES': 'Flipkart Quick', 'FLIPKART QUICK': 'Flipkart Quick', 'FLIPKART': 'Flipkart Quick',
     'FLIPKART SUPERMART': 'Flipkart Supermart', 'RELIANCE': 'Reliance Smart', 'NATURES BASKET': 'NB', "NATURE'S BASKET": 'NB',
 }
+# The Target tab's "T - <line>" columns: the month's target P&L per location x SKU, the MIS's own ladder.
+LADDER = {
+    'T-MRPBILLING': 'mrp_billing', 'T-PARTNERMARGIN': 'partner_margin', 'T-GROSSBILLING': 'gross_billing',
+    'T-RTVAMT': 'rtv', 'T-CONSUMERSALES': 'consumer_sales', 'T-TAXAMOUNT': 'tax', 'T-NETSALES': 'net_sales',
+    'T-COGS': 'cogs', 'T-YIELDLOSS': 'yield_loss', 'T-GM': 'gm', 'T-LOGISTICS': 'logistics', 'T-CM1': 'cm1',
+    'T-ADSSPENDS': 'ads', 'T-DISCOUNTS': 'discounts', 'T-OFFINVOICE': 'off_invoice', 'T-CM2': 'cm2',
+    'T-BRANDBUILDING': 'brand_building', 'T-CM3': 'cm3',
+}
+DETAIL_COLS = ['month', 'channel_group', 'party', 'platform_raw', 'location', 'city_raw', 'sku_name', 'parent_sku',
+               'category', 'item_no', 'qty'] + list(dict.fromkeys(LADDER.values())) + ['source']
 MONTHS = {m.lower(): i for i, m in enumerate(['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'], 1)}
 
 DDL = """
@@ -166,8 +179,9 @@ def find_target_planning_sheets(c):
     return sorted(out)
 
 
-def parse_marketplace(svc, sheet_id, month):
-    """Rows of (party, category, sku, units, value) from the Target tab."""
+def parse_marketplace(svc, sheet_id, month, detail=None):
+    """Rows of (party, category, sku, units, value) from the Target tab; `detail` (a list) also collects
+    one dict per location x SKU line with the whole target ladder."""
     head = values(svc, sheet_id, "'Target'!3:3")
     headers = [str(h).strip() for h in (head[0] if head else [])]
     def col(pred, what):
@@ -180,6 +194,14 @@ def parse_marketplace(svc, sheet_id, month):
     c_sku = col(lambda h: h.upper() == 'SKU NAME', 'SKU Name')
     c_qty = col(lambda h: re.match(r'^QTY\s*TGT\s*-', h, re.I), 'QTY TGT')
     c_val = col(lambda h: re.sub(r'\s+', ' ', h).upper() == 'T - NET SALES', 'T - Net Sales')
+    c_loc = col(lambda h: h.upper() == 'CUSTOMER LOCATION', 'Customer Location')
+    c_city = col(lambda h: h.upper() == 'CITY', 'City')
+    c_parent = next((i for i, h in enumerate(headers) if h.upper() == 'PARENT SKU NAME'), None)
+    ladder = {}
+    for i, h in enumerate(headers):
+        k = re.sub(r'\s+', '', h).upper()
+        if k in LADDER and LADDER[k] not in ladder.values():
+            ladder[i] = LADDER[k]
     m = re.search(r'-\s*([A-Za-z]+)\s+(\d{4})', headers[c_qty])
     if m and m.group(1).lower() in MONTHS:
         hdr_month = dt.date(int(m.group(2)), MONTHS[m.group(1).lower()], 1)
@@ -200,13 +222,24 @@ def parse_marketplace(svc, sheet_id, month):
             if not q and not v:
                 continue
             rows.append((party_of(platform), title(cat) or '(none)', sku.strip().upper(), q or 0.0, v or 0.0))
+            if detail is not None:
+                d = {'party': party_of(platform), 'platform_raw': platform, 'location': str(r[c_loc]).strip(),
+                     'city_raw': str(r[c_city]).strip(), 'sku_name': sku.strip().upper(),
+                     'parent_sku': str(r[c_parent]).strip().upper() if c_parent is not None else None,
+                     'category': title(cat) or '(none)', 'qty': q or 0.0}
+                for i, name in ladder.items():
+                    d[name] = num(r[i]) or 0.0
+                detail.append(d)
         if len(vals) < page:
             break
         start += page
+    if detail is not None:
+        for d in detail:
+            d.setdefault('month', month)
     return month, rows
 
 
-def marketplace_rows(c):
+def marketplace_rows(c, detail_out=None):
     svc = build('sheets', 'v4', credentials=c, cache_discovery=False)
     sheets = find_target_planning_sheets(c)
     if not sheets:
@@ -214,7 +247,12 @@ def marketplace_rows(c):
     out, months = [], set()
     for month, sid, name in sheets:
         try:
-            month, lines = parse_marketplace(svc, sid, month)
+            det = [] if detail_out is not None else None
+            month, lines = parse_marketplace(svc, sid, month, det)
+            if det is not None:
+                for d in det:
+                    d['month'] = month
+                detail_out.extend(det)
         except HttpError as e:
             log.error('%s (%s): HTTP %s -- share it with %s', name, sid, e.resp.status, account_of(c))
             continue
@@ -331,6 +369,57 @@ def write(conn, rows, months, sources, label):
     return len(rows)
 
 
+DETAIL_DDL = """
+create table if not exists warehouse.sales_targets_detail (
+  month date not null, channel_group text not null, party text, platform_raw text, location text, city_raw text,
+  sku_name text, parent_sku text, category text, item_no text, qty numeric,
+""" + ",\n".join(f"  {c} numeric" for c in dict.fromkeys(LADDER.values())) + """,
+  source text not null default 'target', loaded_at timestamptz not null default now()
+);
+create index if not exists sales_targets_detail_month_idx on warehouse.sales_targets_detail (month, party);
+"""
+
+
+def write_detail(conn, detail):
+    if not detail:
+        return 0
+    months = sorted({d['month'] for d in detail})
+    cols = DETAIL_COLS
+    rows = [tuple(d.get(c) if c not in ('channel_group', 'source', 'item_no') else
+                  {'channel_group': 'Marketplace', 'source': 'target', 'item_no': None}[c] for c in cols) for d in detail]
+    with conn.cursor() as cur:
+        cur.execute(DETAIL_DDL)
+        cur.execute('delete from warehouse.sales_targets_detail where source = %s and month = any(%s)', ('target', months))
+        execute_values(cur, f'insert into warehouse.sales_targets_detail ({", ".join(cols)}) values %s', rows, page_size=1000)
+        # the sheet names SKUs the way the MIS's register names products: map them the same two ways
+        cur.execute("""
+            update warehouse.sales_targets_detail t
+               set item_no = coalesce(d.item_no, n.fg_no, n.tg_no)
+              from (select distinct sku_name from warehouse.sales_targets_detail where item_no is null) s
+              left join lateral (select item_no from warehouse.sales_item_dim
+                                  where regexp_replace(upper(product_name), '[^A-Z0-9]', '', 'g') = regexp_replace(s.sku_name, '[^A-Z0-9]', '', 'g')
+                                  order by item_no limit 1) d on true
+              left join public.v_cogs_item_by_name n on n.k = regexp_replace(s.sku_name, '[^A-Z0-9]', '', 'g')
+             where t.sku_name = s.sku_name and t.item_no is null""")
+        cur.execute("select rolname from pg_roles where rolname like 'birbal_scope_%' or rolname = 'birbal_engine'")
+        for (role,) in cur.fetchall():
+            cur.execute(f'grant select on warehouse.sales_targets_detail to "{role}"')
+    conn.commit()
+    log.info('detail: wrote %d location x SKU lines for %s', len(rows), ', '.join(m.strftime('%b-%y') for m in months))
+    # the target-vs-actual snapshot the boards read (Birbal migration 107) follows every load
+    try:
+        with conn.cursor() as cur:
+            cur.execute("select to_regprocedure('app.refresh_target_vs_actual()') is not null")
+            if cur.fetchone()[0]:
+                cur.execute('select app.refresh_target_vs_actual()')
+                log.info('target_vs_actual rebuilt: %s', cur.fetchone()[0])
+        conn.commit()
+    except Exception as e:                                # noqa: BLE001 -- the 3-hourly pg_cron beat will catch up
+        conn.rollback()
+        log.warning('target_vs_actual not rebuilt now (%s); pg_cron rebuilds it within 3 hours', str(e)[:120])
+    return len(rows)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--source', choices=['marketplace', 'trade', 'all'], default='all')
@@ -342,11 +431,14 @@ def main():
     conn = None if a.dry_run else connect()
     failed = False
     if a.source in ('marketplace', 'all'):
-        rows, months = marketplace_rows(creds(a.token))
+        detail = []
+        rows, months = marketplace_rows(creds(a.token), detail)
         if a.dry_run:
             print(f'marketplace: {len(rows)} rows; sample: {rows[:4]}')
+            print(f'detail: {len(detail)} location x SKU lines; sample: {detail[:1]}')
         elif rows:
             write(conn, rows, months, ('target', 'target_sku'), 'marketplace')
+            write_detail(conn, detail)
         else:
             failed = True
     if a.source in ('trade', 'all'):
