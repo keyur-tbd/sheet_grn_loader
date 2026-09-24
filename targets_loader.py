@@ -82,6 +82,8 @@ LADDER = {
 }
 DETAIL_COLS = ['month', 'channel_group', 'party', 'platform_raw', 'location', 'city_raw', 'sku_name', 'parent_sku',
                'category', 'item_no', 'qty'] + list(dict.fromkeys(LADDER.values())) + ['source']
+# parties the business counts as Trade even where the marketing plan lists them (Birbal migration 108)
+TRADE_PARTIES = {'DMart', 'Jio BP', 'GT'}
 MONTHS = {m.lower(): i for i, m in enumerate(['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'], 1)}
 
 DDL = """
@@ -261,11 +263,13 @@ def marketplace_rows(c, detail_out=None):
             a = agg.setdefault((party, cat), [0.0, 0.0]); a[0] += q; a[1] += v
             b = agg_sku.setdefault((party, cat, sku), [0.0, 0.0]); b[0] += q; b[1] += v
         for (party, cat), (q, v) in agg.items():
-            out.append((month, 'Marketplace', party, cat, None, None, 'units', round(q, 3), 'target'))
-            out.append((month, 'Marketplace', party, cat, None, None, 'value', round(v, 2), 'target'))
+            grp = 'Trade' if party in TRADE_PARTIES else 'Marketplace'
+            out.append((month, grp, party, cat, None, None, 'units', round(q, 3), 'target'))
+            out.append((month, grp, party, cat, None, None, 'value', round(v, 2), 'target'))
         for (party, cat, sku), (q, v) in agg_sku.items():
-            out.append((month, 'Marketplace', party, cat, None, sku, 'units', round(q, 3), 'target_sku'))
-            out.append((month, 'Marketplace', party, cat, None, sku, 'value', round(v, 2), 'target_sku'))
+            grp = 'Trade' if party in TRADE_PARTIES else 'Marketplace'
+            out.append((month, grp, party, cat, None, sku, 'units', round(q, 3), 'target_sku'))
+            out.append((month, grp, party, cat, None, sku, 'value', round(v, 2), 'target_sku'))
         months.add(month)
         tot_v = sum(v for (_, _), (_, v) in agg.items())
         log.info('%s: %d lines -> %d party x category rows, net sales target Rs %.2f cr', name, len(lines), len(agg), tot_v / 1e7)
@@ -386,7 +390,8 @@ def write_detail(conn, detail):
     months = sorted({d['month'] for d in detail})
     cols = DETAIL_COLS
     rows = [tuple(d.get(c) if c not in ('channel_group', 'source', 'item_no') else
-                  {'channel_group': 'Marketplace', 'source': 'target', 'item_no': None}[c] for c in cols) for d in detail]
+                  {'channel_group': 'Trade' if d.get('party') in TRADE_PARTIES else 'Marketplace', 'source': 'target', 'item_no': None}[c]
+                  for c in cols) for d in detail]
     with conn.cursor() as cur:
         cur.execute(DETAIL_DDL)
         cur.execute('delete from warehouse.sales_targets_detail where source = %s and month = any(%s)', ('target', months))
