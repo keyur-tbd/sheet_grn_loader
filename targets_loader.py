@@ -66,7 +66,7 @@ PARTY = {
     'AMAZON FRESH': 'Amazon Fresh', 'AMAZON': 'Amazon Fresh',
     'BIG BASKET': 'Big Basket', 'BIGBASKET': 'Big Basket',
     'BLINKIT': 'Blinkit', 'ZEPTO': 'Zepto', 'FIRST CLUB': 'First Club',
-    'ARIPL': 'DMart', 'D MART': 'DMart', 'DMART': 'DMart', 'DMART READY': 'DMart',
+    'ARIPL': 'ARIPL', 'D MART': 'DMart', 'DMART': 'DMart', 'DMART READY': 'DMart Ready',
     'MILK BASKET': 'Milk Basket', 'MILKBASKET': 'Milk Basket',
     'SCOOTSY': 'Instamart', 'INSTAMART': 'Instamart', 'SWIGGY INSTAMART': 'Instamart',
     'FLIPKART MINUTES': 'Flipkart Quick', 'FLIPKART QUICK': 'Flipkart Quick', 'FLIPKART': 'Flipkart Quick',
