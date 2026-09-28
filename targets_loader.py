@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Sales targets (Marketplace and Trade) from the business's own Google Sheets -> warehouse.sales_targets.
+"""Sales targets from the marketing team's Target Planning sheets -> warehouse.sales_targets.
 
-    python targets_loader.py                     # both sources
-    python targets_loader.py --source marketplace
-    python targets_loader.py --source trade --trade-token "D:/.../token.json"
+    python targets_loader.py
     python targets_loader.py --dry-run           # parse and print, write nothing
 
-Two sources, two owners, two grains (2026-09-23, "Changes in Birbal_2" item 16):
+"Changes in Birbal_2" item 16 (2026-09-23). Trade targets are NOT taken from finance's Management MIS
+FY27 sheet (owner's call, 2026-09-28): the only Trade rows are the parties in TRADE_PARTIES that the
+planning sheets list.
 
 * MARKETPLACE -- the marketing team's monthly "Target Planning <Month> - <Year>" sheets (one per
   month, found in Drive by name). Tab `Target`, header row 3, one row per customer location x SKU
@@ -17,19 +17,11 @@ Two sources, two owners, two grains (2026-09-23, "Changes in Birbal_2" item 16):
 * DETAIL -- the same Target tab line by line (customer location x SKU) with the whole target ladder
   (qty, MRP billing ... net sales, COGS, GM, CM1, ads, CM2, CM3) -> warehouse.sales_targets_detail, then
   app.refresh_target_vs_actual() rebuilds warehouse.target_vs_actual (Birbal migration 107).
-* TRADE -- finance's "Management MIS FY27" sheet, tab `YTD Channelwise`: P&L lines x channel in
-  AOP / Target / Actual blocks per month. Only `Net Sales` is taken, from the `Target` block as
-  source='target' (channel_group Trade; also Marketplace as source='mis', finance's own number for
-  the channel) and from the `AOP Target` block as source='aop'. Trade sub-channels (MT Premium, MT
-  Mass, Distributor, GT) are kept as source='mis_sub' with the sub-channel in `party`.
 
-The boards read source='target' only and never mix levels: Marketplace rows are party x category,
-Trade rows are channel-level. Each run replaces the months it read for that source.
+The boards read source='target' only and never mix levels. Each run replaces the months it read.
 
 Environment: SUPABASE_DB_URL (+ SUPABASE_DB_SSLMODE / SUPABASE_DB_SSLROOTCERT), GOOGLE_TOKEN_JSON
-(the instamart@ token: it can open the Target Planning sheets), GOOGLE_TOKEN_JSON_TRADE (a token
-that can open the MIS sheet -- marketing@'s; falls back to GOOGLE_TOKEN_JSON, and if that gets a
-403 the run says whom to share the sheet with).
+(the instamart@ token: it can open the Target Planning sheets).
 """
 from __future__ import annotations
 
@@ -56,8 +48,6 @@ except ImportError:
 
 log = logging.getLogger('targets')
 
-MIS_SHEET_ID = os.environ.get('TARGETS_MIS_SHEET_ID', '1qT4atLhT0YRRtT6S-WsMmHspOiVnn22DBPkEoYUUwL4')
-MIS_TAB = 'YTD Channelwise'
 TARGET_PLANNING_NAME = re.compile(r'^Target Planning\s+([A-Za-z]+)\s*-\s*(\d{4})$', re.I)
 FY_START = dt.date(2026, 4, 1)          # FY27: the boards' invoices are complete only from here
 
@@ -102,7 +92,7 @@ create table if not exists warehouse.sales_targets (
 );
 create unique index if not exists sales_targets_key_uidx on warehouse.sales_targets
   (month, channel_group, coalesce(party,''), coalesce(category,''), coalesce(item_no,''), coalesce(sku,''), measure, source);
-comment on table warehouse.sales_targets is 'Sales targets by month. source=target: Marketplace rows are month x party x category (units + value = net sales ex-GST after returns) from the "Target Planning <Month> - <Year>" sheets; Trade rows are channel-level (value only) from the Management MIS FY27 sheet, tab YTD Channelwise. Other sources (target_sku, mis, mis_sub, aop) are reference grains the boards do not read. Never add rows of different levels together. Loaded by sheet_grn_loader/targets_loader.py.';
+comment on table warehouse.sales_targets is 'Sales targets by month. source=target: Marketplace rows are month x party x category (units + value = net sales ex-GST after returns) from the "Target Planning <Month> - <Year>" sheets; Trade rows are only the Trade parties those sheets list (no channel-level Trade target: the Management MIS is not a source). source=target_sku is the same sheets per SKU, a reference grain the boards do not read. Never add rows of different levels together. Loaded by sheet_grn_loader/targets_loader.py.';
 """
 
 
@@ -276,66 +266,6 @@ def marketplace_rows(c, detail_out=None):
     return out, months
 
 
-# ------------------------------------------------------------------ trade (finance MIS)
-def trade_rows(c):
-    svc = build('sheets', 'v4', credentials=c, cache_discovery=False)
-    try:
-        grid = values(svc, MIS_SHEET_ID, f"'{MIS_TAB}'!A1:ZZ120")
-    except HttpError as e:
-        log.error('Management MIS FY27 sheet: HTTP %s -- share https://docs.google.com/spreadsheets/d/%s with %s (Viewer)', e.resp.status, MIS_SHEET_ID, account_of(c))
-        return [], set()
-    width = max(len(r) for r in grid)
-    grid = [list(r) + [''] * (width - len(r)) for r in grid]
-    row2, row3, row4 = grid[1], grid[2], grid[3]
-    labels = {re.sub(r'\s+', ' ', str(r[0]).strip().lower()): i for i, r in enumerate(grid) if r and str(r[0]).strip()}
-    r_net = labels.get('net sales')
-    if r_net is None:
-        raise SystemExit('YTD Channelwise: no "Net Sales" row')
-    out, months, block, month = [], set(), None, None
-    for ci in range(1, width):
-        if str(row2[ci]).strip():
-            block = str(row2[ci]).strip().lower()
-            month = None
-        if row3[ci] != '' and row3[ci] is not None:
-            month = serial_to_date(row3[ci])          # YTD blocks carry text here -> None
-        ch = re.sub(r'\s+', ' ', str(row4[ci]).strip())
-        if not ch or not block or not month or ch.lower() == 'total':
-            continue
-        v = num(grid[r_net][ci])
-        if v is None:
-            continue
-        month = month.replace(day=1)
-        chl = ch.lower()
-        if block == 'target':
-            if chl in ('marketplace', 'marketplaces'):
-                out.append((month, 'Marketplace', None, None, None, None, 'value', round(v, 2), 'mis'))
-            elif chl == 'trade':
-                out.append((month, 'Trade', None, None, None, None, 'value', round(v, 2), 'target'))
-            elif chl != 'ac':
-                out.append((month, 'Trade', ch, None, None, None, 'value', round(v, 2), 'mis_sub'))
-        elif block == 'aop target':
-            if chl in ('marketplace', 'marketplaces'):
-                out.append((month, 'Marketplace', None, None, None, None, 'value', round(v, 2), 'aop'))
-            elif chl == 'trade':
-                out.append((month, 'Trade', None, None, None, None, 'value', round(v, 2), 'aop'))
-        else:
-            continue
-        months.add(month)
-    # the tab repeats some blocks (the same AOP column twice): keep one row per key. A zero is a month
-    # finance has not set yet (Trade reads 0 from Sep-26 on), not a target of nothing, so it is left out.
-    seen, dedup = set(), []
-    for r in out:
-        key = (r[0], r[1], r[2], r[6], r[8])
-        if key in seen or not r[7]:
-            continue
-        seen.add(key)
-        dedup.append(r)
-    out = dedup
-    months = {r[0] for r in out}
-    log.info('MIS FY27: %d rows over %d months (%s)', len(out), len(months), ', '.join(m.strftime('%b-%y') for m in sorted(months)))
-    return out, months
-
-
 # ------------------------------------------------------------------ database
 def connect():
     dsn = os.environ['SUPABASE_DB_URL']
@@ -427,33 +357,23 @@ def write_detail(conn, detail):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--source', choices=['marketplace', 'trade', 'all'], default='all')
+    ap.add_argument('--source', choices=['marketplace', 'all'], default='all')   # 'all' kept for old callers
     ap.add_argument('--dry-run', action='store_true')
-    ap.add_argument('--trade-token', default=os.environ.get('GOOGLE_TOKEN_JSON_TRADE') or os.environ.get('GOOGLE_TOKEN_JSON', 'token.json'))
     ap.add_argument('--token', default=os.environ.get('GOOGLE_TOKEN_JSON', 'token.json'))
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     conn = None if a.dry_run else connect()
     failed = False
-    if a.source in ('marketplace', 'all'):
-        detail = []
-        rows, months = marketplace_rows(creds(a.token), detail)
-        if a.dry_run:
-            print(f'marketplace: {len(rows)} rows; sample: {rows[:4]}')
-            print(f'detail: {len(detail)} location x SKU lines; sample: {detail[:1]}')
-        elif rows:
-            write(conn, rows, months, ('target', 'target_sku'), 'marketplace')
-            write_detail(conn, detail)
-        else:
-            failed = True
-    if a.source in ('trade', 'all'):
-        rows, months = trade_rows(creds(a.trade_token))
-        if a.dry_run:
-            print(f'trade: {len(rows)} rows; sample: {[r for r in rows if r[8] == "target"][:4]}')
-        elif rows:
-            write(conn, rows, months, ('target', 'mis', 'mis_sub', 'aop'), 'trade')
-        else:
-            failed = True
+    detail = []
+    rows, months = marketplace_rows(creds(a.token), detail)
+    if a.dry_run:
+        print(f'marketplace: {len(rows)} rows; sample: {rows[:4]}')
+        print(f'detail: {len(detail)} location x SKU lines; sample: {detail[:1]}')
+    elif rows:
+        write(conn, rows, months, ('target', 'target_sku'), 'marketplace')
+        write_detail(conn, detail)
+    else:
+        failed = True
     if conn:
         conn.close()
     sys.exit(1 if failed else 0)

@@ -63,10 +63,7 @@ beat (`targets` job):
 * **Marketplace** -- every "Target Planning <Month> - <Year>" sheet from April 2026 (found in Drive by
   name; tab `Target`, header row 3): `QTY TGT` and `T - Net Sales` per location x SKU, folded to month x
   party x category (`source='target'`) and kept per SKU (`source='target_sku'`).
-* **Trade** -- finance's "Management MIS FY27" sheet, tab `YTD Channelwise`, row `Net Sales`: the Target
-  block's Trade column (`source='target'`), Marketplace (`mis`), the Trade sub-channels (`mis_sub`) and the
-  AOP Target block (`aop`). This sheet must be shared with the loader's account (or a token that can open
-  it stored as `GOOGLE_TOKEN_JSON_TRADE_B64`); until then the Trade step fails on its own and says whom to
-  share with.
+* **Trade** -- not loaded from finance's "Management MIS FY27" sheet (owner's call, 2026-09-28). The only
+  Trade target rows are the Trade parties (DMart, Jio BP, GT) that the planning sheets list.
 
-`python targets_loader.py --dry-run` parses both and writes nothing.
+`python targets_loader.py --dry-run` parses the sheets and writes nothing.
