@@ -19,12 +19,14 @@ FY27 sheet (owner's call, 2026-09-28) but from the Trade team's own planning she
   (qty, MRP billing ... net sales, COGS, GM, CM1, ads, CM2, CM3) -> warehouse.sales_targets_detail, then
   app.refresh_target_vs_actual() rebuilds warehouse.target_vs_actual (Birbal migration 107).
 * TRADE -- the Trade team's monthly "Trade Target Planning <Mon>'<yy>" sheets (from Jun'26; shared with
-  instamart@ 2026-09-25). Tab `Target P&L`: P&L lines x party, first column the total with GT. Only the
-  `Net Sales` line is taken:
-    source='target'        Trade, party NULL: the month's channel total  <- the Primary Sales board reads this
-    source='target_party'  Trade, per party (the sheet's party names)    <- for Ask / SQL
-  The Marketplace sheets' DMart / Jio BP / GT lines stay party-level Trade rows under source='target';
-  the delete below keeps the two apart by party-level vs channel-level.
+  instamart@ 2026-09-25). Tab `<Mon> TGT`, header row 2, one row per store x item with PARTY, NAME (the
+  store = the invoice ship-to name), CITY, CATEGORY, ITEM NAME, `<Mon> Net Sales Qty` and the ladder
+  (MRP SUPPLY TGT ... Net Sales TGT, COGS TGT, Gross Margin TGT). Loaded like the Marketplace lines:
+  store x SKU into warehouse.sales_targets_detail (plan='trade'; party = the ship-to's party_master),
+  then folded to party x category (source='target') and SKU (source='target_sku') in sales_targets.
+  Each month's lines are checked against the `Target P&L` tab's Net Sales total.
+  In a month that has a Trade sheet, the Marketplace sheets' DMart / Jio BP / GT lines are dropped: the
+  Trade sheet is the Trade target.
 
 The boards read source='target' only and never mix levels. Each run replaces the months it read.
 
@@ -80,11 +82,20 @@ LADDER = {
     'T-BRANDBUILDING': 'brand_building', 'T-CM3': 'cm3',
 }
 DETAIL_COLS = ['month', 'channel_group', 'party', 'platform_raw', 'location', 'city_raw', 'sku_name', 'parent_sku',
-               'category', 'item_no', 'qty'] + list(dict.fromkeys(LADDER.values())) + ['source']
+               'category', 'item_no', 'qty'] + list(dict.fromkeys(LADDER.values())) + ['source', 'plan']
 # parties the business counts as Trade even where the marketing plan lists them (Birbal migration 108)
 TRADE_PARTIES = {'DMart', 'Jio BP', 'GT'}
 # the Trade sheets' spellings party_of() would title-case wrongly
 TRADE_PARTY = {'JIO BP': 'Jio BP', 'GT': 'GT', 'NB': 'NB', 'METRO C&C': 'Metro C&C', 'M.K. RETAIL': 'M.K. Retail'}
+# the `<Mon> TGT` tab's ladder columns -> sales_targets_detail columns (first occurrence of each header)
+TRADE_LADDER = {
+    'MRP SUPPLY TGT': 'mrp_billing', 'COMMSISON TGT': 'partner_margin', 'COMMISSION TGT': 'partner_margin',
+    'GROSS BILLING TGT': 'gross_billing', 'RTV VALUE TGT': 'rtv', 'CONSUMER SALES TGT': 'consumer_sales',
+    'GST VALUE TGT': 'tax', 'NET SALES TGT': 'net_sales', 'COGS TGT': 'cogs', 'GROSS MARGIN TGT': 'gm',
+    'OFFER TGT': 'discounts', 'OFF-INVOICE TGT': 'off_invoice',
+}
+# Trade sheet item names the register spells differently
+SKU_ALIAS = {'RAGI FULL LOAF': 'RAGI LOAF'}
 MONTHS = {m.lower(): i for i, m in enumerate(['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'], 1)}
 
 DDL = """
@@ -103,7 +114,7 @@ create table if not exists warehouse.sales_targets (
 );
 create unique index if not exists sales_targets_key_uidx on warehouse.sales_targets
   (month, channel_group, coalesce(party,''), coalesce(category,''), coalesce(item_no,''), coalesce(sku,''), measure, source);
-comment on table warehouse.sales_targets is 'Sales targets by month. source=target: Marketplace rows are month x party x category (units + value = net sales ex-GST after returns) from the "Target Planning <Month> - <Year>" sheets; Trade rows are one channel-level row per month (party NULL, value only) from the "Trade Target Planning <Mon>''<yy>" sheets, plus the DMart / Jio BP / GT party rows the Marketplace sheets list. source=target_sku (Marketplace sheets per SKU) and source=target_party (Trade sheets per party) are reference grains the boards do not read. The Management MIS is not a source. Never add rows of different levels together. Loaded by sheet_grn_loader/targets_loader.py.';
+comment on table warehouse.sales_targets is 'Sales targets by month. source=target: Marketplace rows are month x party x category (units + value = net sales ex-GST after returns) from the "Target Planning <Month> - <Year>" sheets; Trade rows are month x party x category the same way, from the store x SKU lines of the "Trade Target Planning <Mon>''<yy>" sheets (plus, only in months with no Trade sheet, the DMart / Jio BP / GT rows the Marketplace sheets list). source=target_sku is the SKU grain of both, a reference the boards do not read. The Management MIS is not a source. Never add rows of different levels together. Loaded by sheet_grn_loader/targets_loader.py.';
 """
 
 
@@ -242,7 +253,7 @@ def parse_marketplace(svc, sheet_id, month, detail=None):
     return month, rows
 
 
-def marketplace_rows(c, detail_out=None):
+def marketplace_rows(c, detail_out=None, trade_months=frozenset()):
     svc = build('sheets', 'v4', credentials=c, cache_discovery=False)
     sheets = find_target_planning_sheets(c)
     if not sheets:
@@ -252,6 +263,14 @@ def marketplace_rows(c, detail_out=None):
         try:
             det = [] if detail_out is not None else None
             month, lines = parse_marketplace(svc, sid, month, det)
+            if month in trade_months:
+                # the Trade sheet is this month's Trade target; the marketing plan's DMart / Jio BP / GT go
+                n = len(lines)
+                lines = [ln for ln in lines if ln[0] not in TRADE_PARTIES]
+                if det is not None:
+                    det = [d for d in det if d['party'] not in TRADE_PARTIES]
+                if n != len(lines):
+                    log.info('%s: %d Trade-party lines left to the Trade sheet', name, n - len(lines))
             if det is not None:
                 for d in det:
                     d['month'] = month
@@ -296,53 +315,82 @@ def find_trade_planning_sheets(c):
     return sorted(out)
 
 
-def parse_trade(svc, sheet_id):
-    """(total, {party: net sales}) from the `Target P&L` tab's `Net Sales` line."""
+def pl_net_sales(svc, sheet_id):
+    """The `Target P&L` tab's Net Sales total (the check the lines must add up to), or None."""
     grid = values(svc, sheet_id, "'Target P&L'!A1:BZ80")
     hdr = next((r for r in grid if r and str(r[0]).strip().upper().startswith('CHANNEL P&L')), None)
     net = next((r for r in grid if r and str(r[0]).strip().lower() == 'net sales'), None)
     if hdr is None or net is None:
-        raise ValueError('Target P&L tab has no "Channel P&L" header row or no "Net Sales" row')
-    names = [re.sub(r'\s+', ' ', str(h)).strip() for h in hdr]
-    c_total = next((i for i, h in enumerate(names) if i and h.upper().startswith('TOTAL')), None)
-    if c_total is None:
-        raise ValueError(f'Target P&L tab has no Total column (header: {names[:6]}...)')
-    total = num(net[c_total]) if c_total < len(net) else None
-    parties = {}
-    for i, h in enumerate(names):
-        if i == 0 or i == c_total or not h or h.upper().startswith('TOTAL') or i >= len(net):
+        return None
+    c_total = next((i for i, h in enumerate(hdr) if i and str(h).strip().upper().startswith('TOTAL')), None)
+    return num(net[c_total]) if c_total is not None and c_total < len(net) else None
+
+
+def parse_trade(svc, sheet_id, month):
+    """One dict per store x item line of the `<Mon> TGT` tab (lines with no quantity and no value are left out)."""
+    tabs = [x['properties']['title'] for x in svc.spreadsheets().get(spreadsheetId=sheet_id, fields='sheets(properties(title))').execute()['sheets']]
+    tab = next((x for x in tabs if re.fullmatch(r'[A-Za-z]+ TGT', x.strip()) and x.strip().upper() != 'PARTY TGT'), None)
+    if tab is None:
+        raise ValueError(f'no "<Mon> TGT" tab (tabs: {tabs})')
+    grid = values(svc, sheet_id, f"'{tab}'!A1:BZ20000")
+    hi = next((i for i, r in enumerate(grid[:6]) if r and str(r[0]).strip().upper() == 'PARTY'), None)
+    if hi is None:
+        raise ValueError(f'{tab}: no PARTY header row in the first 6 rows')
+    headers = [re.sub(r'\s+', ' ', str(h)).strip().upper() for h in grid[hi]]
+    first = {}
+    for i, h in enumerate(headers):
+        first.setdefault(h, i)
+    need = {k: first.get(k) for k in ('PARTY', 'NAME', 'CITY', 'CATEGORY', 'ITEM NAME', 'NET SALES TGT')}
+    c_qty = next((i for i, h in enumerate(headers) if h.endswith('NET SALES QTY')), None)
+    missing = [k for k, v in need.items() if v is None] + (['<Mon> Net Sales Qty'] if c_qty is None else [])
+    if missing:
+        raise ValueError(f'{tab}: no {", ".join(missing)} column (headers: {headers[:12]}...)')
+    ladder = {first[h]: col for h, col in TRADE_LADDER.items() if h in first}
+    out = []
+    for r in grid[hi + 1:]:
+        r = list(r) + [''] * (len(headers) - len(r))
+        party = str(r[need['PARTY']]).strip()
+        store = str(r[need['NAME']]).strip()
+        item = re.sub(r'\s+', ' ', str(r[need['ITEM NAME']]).strip().upper())
+        if not party or not store or not item:
             continue
-        v = num(net[i])
-        if v:
-            parties[h] = parties.get(h, 0.0) + v
-    return total, parties
+        q = num(r[c_qty]) or 0.0
+        d = {'month': month, 'party': TRADE_PARTY.get(party.upper(), party_of(party)), 'platform_raw': party,
+             'location': store, 'city_raw': str(r[need['CITY']]).strip(), 'sku_name': SKU_ALIAS.get(item, item),
+             'parent_sku': None, 'category': title(str(r[need['CATEGORY']]).strip()) or '(none)', 'qty': q}
+        for i, col in ladder.items():
+            d[col] = num(r[i]) or 0.0
+        if not q and not d.get('net_sales'):
+            continue
+        out.append(d)
+    return tab, out
 
 
-def trade_rows(c):
+def trade_detail(c, sheets):
     svc = build('sheets', 'v4', credentials=c, cache_discovery=False)
-    sheets = find_trade_planning_sheets(c)
     if not sheets:
         log.warning('no "Trade Target Planning <Mon>\'<yy>" sheet visible to %s', account_of(c))
-    out, months, bad = [], set(), []
+    detail, months, bad = [], set(), []
     for month, sid, name in sheets:
         try:
-            total, parties = parse_trade(svc, sid)
+            tab, lines = parse_trade(svc, sid, month)
+            check = pl_net_sales(svc, sid)
         except (HttpError, ValueError) as e:
             status = getattr(getattr(e, 'resp', None), 'status', None)
             log.error('%s (%s): %s', name, sid, f'HTTP {status} -- share it with {account_of(c)}' if status else e)
             bad.append(name)
             continue
-        if not total:
-            log.warning('%s: Net Sales total is empty, skipped', name)
+        if not lines:
+            log.warning('%s: no target lines, skipped', name)
             continue
-        if parties and abs(sum(parties.values()) - total) > 0.01 * total:
-            log.warning('%s: parties add up to Rs %.2f cr, the total column says Rs %.2f cr', name, sum(parties.values()) / 1e7, total / 1e7)
-        out.append((month, 'Trade', None, None, None, None, 'value', round(total, 2), 'target'))
-        for party, v in parties.items():
-            out.append((month, 'Trade', TRADE_PARTY.get(party.upper(), party_of(party)), None, None, None, 'value', round(v, 2), 'target_party'))
+        tot = sum(d.get('net_sales') or 0.0 for d in lines)
+        if check and abs(tot - check) > 0.01 * check:
+            log.warning('%s: store x SKU lines add up to Rs %.2f L, the Target P&L says Rs %.2f L', name, tot / 1e5, check / 1e5)
+        detail += lines
         months.add(month)
-        log.info('%s: Trade net sales target Rs %.2f L over %d parties', name, total / 1e5, len(parties))
-    return out, months, bad
+        log.info('%s: %d store x SKU lines (%s), %d stores, net sales target Rs %.2f L', name, len(lines), tab,
+                 len({d['location'] for d in lines}), tot / 1e5)
+    return detail, months, bad
 
 
 # ------------------------------------------------------------------ database
@@ -392,20 +440,27 @@ create table if not exists warehouse.sales_targets_detail (
   source text not null default 'target', loaded_at timestamptz not null default now()
 );
 create index if not exists sales_targets_detail_month_idx on warehouse.sales_targets_detail (month, party);
+-- which sheet a line came from, so the Marketplace and Trade loads replace only their own lines
+alter table warehouse.sales_targets_detail add column if not exists plan text not null default 'marketplace';
 """
 
 
-def write_detail(conn, detail):
+def write_detail(conn, detail, plan):
+    """Replace `plan`'s lines for the months in `detail` ('marketplace' or 'trade')."""
     if not detail:
         return 0
     months = sorted({d['month'] for d in detail})
     cols = DETAIL_COLS
-    rows = [tuple(d.get(c) if c not in ('channel_group', 'source', 'item_no') else
-                  {'channel_group': 'Trade' if d.get('party') in TRADE_PARTIES else 'Marketplace', 'source': 'target', 'item_no': None}[c]
-                  for c in cols) for d in detail]
+    def grp(d):
+        return 'Trade' if plan == 'trade' or d.get('party') in TRADE_PARTIES else 'Marketplace'
+    rows = [tuple({'channel_group': grp(d), 'source': 'target', 'item_no': None, 'plan': plan}[c]
+                  if c in ('channel_group', 'source', 'item_no', 'plan') else d.get(c) for c in cols) for d in detail]
     with conn.cursor() as cur:
         cur.execute(DETAIL_DDL)
-        cur.execute('delete from warehouse.sales_targets_detail where source = %s and month = any(%s)', ('target', months))
+        cur.execute('delete from warehouse.sales_targets_detail where source = %s and plan = %s and month = any(%s)', ('target', plan, months))
+        if plan == 'trade':
+            # a month with a Trade sheet takes its Trade target from there only
+            cur.execute("delete from warehouse.sales_targets_detail where source = 'target' and plan = 'marketplace' and channel_group = 'Trade' and month = any(%s)", (months,))
         execute_values(cur, f'insert into warehouse.sales_targets_detail ({", ".join(cols)}) values %s', rows, page_size=1000)
         # the sheet names SKUs the way the MIS's register names products: map them the same two ways
         cur.execute("""
@@ -417,11 +472,59 @@ def write_detail(conn, detail):
                                   order by item_no limit 1) d on true
               left join public.v_cogs_item_by_name n on n.k = regexp_replace(s.sku_name, '[^A-Z0-9]', '', 'g')
              where t.sku_name = s.sku_name and t.item_no is null""")
+        if plan == 'trade':
+            # the Trade sheet's store is the invoice ship-to: take the party the register gives that ship-to
+            # (COMPASS INDIA's stores are GT there), so target and actual meet on the same party
+            cur.execute("""
+                update warehouse.sales_targets_detail t
+                   set party = m.party
+                  from (select warehouse.location_key(ship_to_name) as k, mode() within group (order by party_master) as party
+                          from warehouse.pnl_lines
+                         where business = 'TRADE' and party_master is not null and party_master <> '(unmapped)'
+                         group by 1) m
+                 where t.plan = 'trade' and t.month = any(%s) and warehouse.location_key(t.location) = m.k
+                   and t.party is distinct from m.party""", (months,))
+            log.info('trade: %d lines took the register\'s party for their ship-to', cur.rowcount)
         cur.execute("select rolname from pg_roles where rolname like 'birbal_scope_%' or rolname = 'birbal_engine'")
         for (role,) in cur.fetchall():
             cur.execute(f'grant select on warehouse.sales_targets_detail to "{role}"')
     conn.commit()
-    log.info('detail: wrote %d location x SKU lines for %s', len(rows), ', '.join(m.strftime('%b-%y') for m in months))
+    log.info('detail (%s): wrote %d lines for %s', plan, len(rows), ', '.join(m.strftime('%b-%y') for m in months))
+    return len(rows)
+
+
+def write_trade_targets(conn, months):
+    """sales_targets' Trade rows for the Trade-sheet months, folded from the detail just written: party x
+    category (source='target', what the boards read) and SKU (source='target_sku'), units and value."""
+    months = sorted(months)
+    with conn.cursor() as cur:
+        cur.execute(DDL)
+        cur.execute("delete from warehouse.sales_targets where channel_group = 'Trade' and month = any(%s) and source in ('target', 'target_sku', 'target_party')", (months,))
+        cur.execute("""
+            with d as (select month, party, category, sku_name, sum(qty) as q, sum(net_sales) as v
+                         from warehouse.sales_targets_detail
+                        where source = 'target' and plan = 'trade' and month = any(%s)
+                        group by 1, 2, 3, 4)
+            insert into warehouse.sales_targets (month, channel_group, party, category, item_no, sku, measure, target, source)
+            select month, 'Trade', party, category, null, null, 'units', round(sum(q), 3), 'target' from d group by month, party, category
+            union all
+            select month, 'Trade', party, category, null, null, 'value', round(sum(v), 2), 'target' from d group by month, party, category
+            union all
+            select month, 'Trade', party, category, null, sku_name, 'units', round(q, 3), 'target_sku' from d
+            union all
+            select month, 'Trade', party, category, null, sku_name, 'value', round(v, 2), 'target_sku' from d""", (months,))
+        n = cur.rowcount
+        try:
+            cur.execute("insert into public.workflow_logs (workflow, source, started_at, ended_at, status, details, rows_written, processed, created_at) values (%s, %s, now(), now(), 'success', %s::jsonb, %s, %s, now())",
+                        ('sheet_grn_loader:targets_trade', 'targets:trade', json.dumps({'months': [m.isoformat() for m in months]}), n, n))
+        except Exception as e:                            # noqa: BLE001
+            log.warning('workflow_logs not written: %s', str(e)[:100])
+    conn.commit()
+    log.info('trade: wrote %d target rows for %s', n, ', '.join(m.strftime('%b-%y') for m in months))
+    return n
+
+
+def refresh_target_vs_actual(conn):
     # the target-vs-actual snapshot the boards read (Birbal migration 107) follows every load
     try:
         with conn.cursor() as cur:
@@ -433,7 +536,6 @@ def write_detail(conn, detail):
     except Exception as e:                                # noqa: BLE001 -- the 3-hourly pg_cron beat will catch up
         conn.rollback()
         log.warning('target_vs_actual not rebuilt now (%s); pg_cron rebuilds it within 3 hours', str(e)[:120])
-    return len(rows)
 
 
 def main():
@@ -445,25 +547,32 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     conn = None if a.dry_run else connect()
     c = creds(a.token)
-    failed = False
+    trade_sheets = find_trade_planning_sheets(c)
+    trade_months = frozenset(m for m, _, _ in trade_sheets)
+    failed, wrote = False, False
     if a.source in ('marketplace', 'all'):
         detail = []
-        rows, months = marketplace_rows(c, detail)
+        rows, months = marketplace_rows(c, detail, trade_months)
         if a.dry_run:
             print(f'marketplace: {len(rows)} rows; sample: {rows[:4]}')
             print(f'detail: {len(detail)} location x SKU lines; sample: {detail[:1]}')
         elif rows:
             write(conn, rows, months, ('target', 'target_sku'), 'marketplace')
-            write_detail(conn, detail)
+            write_detail(conn, detail, 'marketplace')
+            wrote = True
         else:
             failed = True
     if a.source in ('trade', 'all'):
-        rows, months, bad = trade_rows(c)
+        detail, months, bad = trade_detail(c, trade_sheets)
         if a.dry_run:
-            print(f'trade: {len(rows)} rows; channel totals: {[(r[0].isoformat(), r[7]) for r in rows if r[8] == "target"]}')
-        elif rows:
-            write(conn, rows, months, ('target', 'target_party'), 'trade')
-        failed = failed or not rows or bool(bad)
+            print(f'trade: {len(detail)} store x SKU lines; sample: {detail[:1]}')
+        elif detail:
+            write_detail(conn, detail, 'trade')
+            write_trade_targets(conn, months)
+            wrote = True
+        failed = failed or not detail or bool(bad)
+    if wrote:
+        refresh_target_vs_actual(conn)
     if conn:
         conn.close()
     sys.exit(1 if failed else 0)

@@ -64,8 +64,9 @@ beat (`targets` job):
   name; tab `Target`, header row 3): `QTY TGT` and `T - Net Sales` per location x SKU, folded to month x
   party x category (`source='target'`) and kept per SKU (`source='target_sku'`).
 * **Trade** -- the Trade team's "Trade Target Planning <Mon>'<yy>" sheets (from Jun'26, shared with instamart@),
-  tab `Target P&L`, line `Net Sales`: the total column as the month's channel-level Trade target
-  (`source='target'`, party NULL -- what the board reads) and each party column as `source='target_party'`.
-  Not finance's "Management MIS FY27" sheet (owner's call, 2026-09-28).
+  tab `<Mon> TGT`: one line per store x item (store = invoice ship-to name) with the ladder up to gross
+  margin -> `warehouse.sales_targets_detail` (`plan='trade'`), folded to party x category (`source='target'`)
+  and SKU (`target_sku`). Checked against the `Target P&L` tab's Net Sales. In a month with a Trade sheet the
+  Marketplace sheets' DMart / Jio BP / GT lines are dropped. Not finance's "Management MIS FY27" sheet.
 
 `python targets_loader.py --dry-run` parses the sheets and writes nothing.
