@@ -61,7 +61,8 @@ jobs:
         run: python never_billed_sheet.py
 
   # Sales targets for the Primary Sales board (Birbal migration 102): the marketing team's monthly
-  # "Target Planning <Month> - <Year>" sheets. Not finance's Management MIS: owner's call, 2026-09-28.
+  # "Target Planning <Month> - <Year>" sheets + the Trade team's "Trade Target Planning <Mon>'<yy>" sheets.
+  # Not finance's Management MIS: owner's call, 2026-09-28.
   targets:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -73,8 +74,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Restore the Google token
         run: echo "${{ secrets.GOOGLE_TOKEN_JSON_B64 }}" | base64 -d > token.json
-      - name: Marketplace targets
+      - name: Marketplace + Trade targets
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           GOOGLE_TOKEN_JSON: token.json
-        run: python targets_loader.py --source marketplace
+        run: python targets_loader.py

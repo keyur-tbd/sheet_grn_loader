@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Sales targets from the marketing team's Target Planning sheets -> warehouse.sales_targets.
+"""Sales targets from the business's planning sheets -> warehouse.sales_targets.
 
-    python targets_loader.py
+    python targets_loader.py                     # both
+    python targets_loader.py --source marketplace
+    python targets_loader.py --source trade
     python targets_loader.py --dry-run           # parse and print, write nothing
 
 "Changes in Birbal_2" item 16 (2026-09-23). Trade targets are NOT taken from finance's Management MIS
-FY27 sheet (owner's call, 2026-09-28): the only Trade rows are the parties in TRADE_PARTIES that the
-planning sheets list.
+FY27 sheet (owner's call, 2026-09-28) but from the Trade team's own planning sheets (TRADE below).
 
 * MARKETPLACE -- the marketing team's monthly "Target Planning <Month> - <Year>" sheets (one per
   month, found in Drive by name). Tab `Target`, header row 3, one row per customer location x SKU
@@ -17,11 +18,18 @@ planning sheets list.
 * DETAIL -- the same Target tab line by line (customer location x SKU) with the whole target ladder
   (qty, MRP billing ... net sales, COGS, GM, CM1, ads, CM2, CM3) -> warehouse.sales_targets_detail, then
   app.refresh_target_vs_actual() rebuilds warehouse.target_vs_actual (Birbal migration 107).
+* TRADE -- the Trade team's monthly "Trade Target Planning <Mon>'<yy>" sheets (from Jun'26; shared with
+  instamart@ 2026-09-25). Tab `Target P&L`: P&L lines x party, first column the total with GT. Only the
+  `Net Sales` line is taken:
+    source='target'        Trade, party NULL: the month's channel total  <- the Primary Sales board reads this
+    source='target_party'  Trade, per party (the sheet's party names)    <- for Ask / SQL
+  The Marketplace sheets' DMart / Jio BP / GT lines stay party-level Trade rows under source='target';
+  the delete below keeps the two apart by party-level vs channel-level.
 
 The boards read source='target' only and never mix levels. Each run replaces the months it read.
 
 Environment: SUPABASE_DB_URL (+ SUPABASE_DB_SSLMODE / SUPABASE_DB_SSLROOTCERT), GOOGLE_TOKEN_JSON
-(the instamart@ token: it can open the Target Planning sheets).
+(the instamart@ token: it can open both sets of planning sheets).
 """
 from __future__ import annotations
 
@@ -49,6 +57,7 @@ except ImportError:
 log = logging.getLogger('targets')
 
 TARGET_PLANNING_NAME = re.compile(r'^Target Planning\s+([A-Za-z]+)\s*-\s*(\d{4})$', re.I)
+TRADE_PLANNING_NAME = re.compile(r"^Trade Target Planning\s+([A-Za-z]+)\s*['’]?\s*(\d{2}|\d{4})$", re.I)
 FY_START = dt.date(2026, 4, 1)          # FY27: the boards' invoices are complete only from here
 
 # the sheet's platform spellings -> the boards' party names (channels.js PLATFORM_PARTY)
@@ -74,6 +83,8 @@ DETAIL_COLS = ['month', 'channel_group', 'party', 'platform_raw', 'location', 'c
                'category', 'item_no', 'qty'] + list(dict.fromkeys(LADDER.values())) + ['source']
 # parties the business counts as Trade even where the marketing plan lists them (Birbal migration 108)
 TRADE_PARTIES = {'DMart', 'Jio BP', 'GT'}
+# the Trade sheets' spellings party_of() would title-case wrongly
+TRADE_PARTY = {'JIO BP': 'Jio BP', 'GT': 'GT', 'NB': 'NB', 'METRO C&C': 'Metro C&C', 'M.K. RETAIL': 'M.K. Retail'}
 MONTHS = {m.lower(): i for i, m in enumerate(['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'], 1)}
 
 DDL = """
@@ -92,7 +103,7 @@ create table if not exists warehouse.sales_targets (
 );
 create unique index if not exists sales_targets_key_uidx on warehouse.sales_targets
   (month, channel_group, coalesce(party,''), coalesce(category,''), coalesce(item_no,''), coalesce(sku,''), measure, source);
-comment on table warehouse.sales_targets is 'Sales targets by month. source=target: Marketplace rows are month x party x category (units + value = net sales ex-GST after returns) from the "Target Planning <Month> - <Year>" sheets; Trade rows are only the Trade parties those sheets list (no channel-level Trade target: the Management MIS is not a source). source=target_sku is the same sheets per SKU, a reference grain the boards do not read. Never add rows of different levels together. Loaded by sheet_grn_loader/targets_loader.py.';
+comment on table warehouse.sales_targets is 'Sales targets by month. source=target: Marketplace rows are month x party x category (units + value = net sales ex-GST after returns) from the "Target Planning <Month> - <Year>" sheets; Trade rows are one channel-level row per month (party NULL, value only) from the "Trade Target Planning <Mon>''<yy>" sheets, plus the DMart / Jio BP / GT party rows the Marketplace sheets list. source=target_sku (Marketplace sheets per SKU) and source=target_party (Trade sheets per party) are reference grains the boards do not read. The Management MIS is not a source. Never add rows of different levels together. Loaded by sheet_grn_loader/targets_loader.py.';
 """
 
 
@@ -266,6 +277,74 @@ def marketplace_rows(c, detail_out=None):
     return out, months
 
 
+# ------------------------------------------------------------------ trade
+def find_trade_planning_sheets(c):
+    drive = build('drive', 'v3', credentials=c, cache_discovery=False)
+    q = "name contains 'Trade Target Planning' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"
+    r = drive.files().list(q=q, fields='files(id, name)', pageSize=200,
+                           includeItemsFromAllDrives=True, supportsAllDrives=True, corpora='allDrives').execute()
+    by3 = {k[:3]: v for k, v in MONTHS.items()}
+    out = []
+    for f in r.get('files', []):
+        m = TRADE_PLANNING_NAME.match(f['name'].strip())
+        if not m or m.group(1).lower()[:3] not in by3:
+            continue
+        year = int(m.group(2))
+        month = dt.date(year + 2000 if year < 100 else year, by3[m.group(1).lower()[:3]], 1)
+        if month >= FY_START:
+            out.append((month, f['id'], f['name']))
+    return sorted(out)
+
+
+def parse_trade(svc, sheet_id):
+    """(total, {party: net sales}) from the `Target P&L` tab's `Net Sales` line."""
+    grid = values(svc, sheet_id, "'Target P&L'!A1:BZ80")
+    hdr = next((r for r in grid if r and str(r[0]).strip().upper().startswith('CHANNEL P&L')), None)
+    net = next((r for r in grid if r and str(r[0]).strip().lower() == 'net sales'), None)
+    if hdr is None or net is None:
+        raise ValueError('Target P&L tab has no "Channel P&L" header row or no "Net Sales" row')
+    names = [re.sub(r'\s+', ' ', str(h)).strip() for h in hdr]
+    c_total = next((i for i, h in enumerate(names) if i and h.upper().startswith('TOTAL')), None)
+    if c_total is None:
+        raise ValueError(f'Target P&L tab has no Total column (header: {names[:6]}...)')
+    total = num(net[c_total]) if c_total < len(net) else None
+    parties = {}
+    for i, h in enumerate(names):
+        if i == 0 or i == c_total or not h or h.upper().startswith('TOTAL') or i >= len(net):
+            continue
+        v = num(net[i])
+        if v:
+            parties[h] = parties.get(h, 0.0) + v
+    return total, parties
+
+
+def trade_rows(c):
+    svc = build('sheets', 'v4', credentials=c, cache_discovery=False)
+    sheets = find_trade_planning_sheets(c)
+    if not sheets:
+        log.warning('no "Trade Target Planning <Mon>\'<yy>" sheet visible to %s', account_of(c))
+    out, months, bad = [], set(), []
+    for month, sid, name in sheets:
+        try:
+            total, parties = parse_trade(svc, sid)
+        except (HttpError, ValueError) as e:
+            status = getattr(getattr(e, 'resp', None), 'status', None)
+            log.error('%s (%s): %s', name, sid, f'HTTP {status} -- share it with {account_of(c)}' if status else e)
+            bad.append(name)
+            continue
+        if not total:
+            log.warning('%s: Net Sales total is empty, skipped', name)
+            continue
+        if parties and abs(sum(parties.values()) - total) > 0.01 * total:
+            log.warning('%s: parties add up to Rs %.2f cr, the total column says Rs %.2f cr', name, sum(parties.values()) / 1e7, total / 1e7)
+        out.append((month, 'Trade', None, None, None, None, 'value', round(total, 2), 'target'))
+        for party, v in parties.items():
+            out.append((month, 'Trade', TRADE_PARTY.get(party.upper(), party_of(party)), None, None, None, 'value', round(v, 2), 'target_party'))
+        months.add(month)
+        log.info('%s: Trade net sales target Rs %.2f L over %d parties', name, total / 1e5, len(parties))
+    return out, months, bad
+
+
 # ------------------------------------------------------------------ database
 def connect():
     dsn = os.environ['SUPABASE_DB_URL']
@@ -281,11 +360,13 @@ def write(conn, rows, months, sources, label):
         return 0
     with conn.cursor() as cur:
         cur.execute(DDL)
-        # replace exactly the (source, channel, month) slices this run read -- the Marketplace and Trade
-        # runs both write source='target', for different channels, and must not wipe each other
-        keys = sorted({(r[8], r[1], r[0]) for r in rows})
-        for src, chan, month in keys:
-            cur.execute('delete from warehouse.sales_targets where source = %s and channel_group = %s and month = %s', (src, chan, month))
+        # replace exactly the (source, channel, month, party-level?) slices this run read -- both runs write
+        # source='target' Trade rows (Marketplace: DMart / Jio BP / GT per party; Trade: the channel total,
+        # party NULL) and must not wipe each other
+        keys = sorted({(r[8], r[1], r[0], r[2] is None) for r in rows})
+        for src, chan, month, channel_level in keys:
+            cur.execute('delete from warehouse.sales_targets where source = %s and channel_group = %s and month = %s and (party is null) = %s',
+                        (src, chan, month, channel_level))
         execute_values(cur, 'insert into warehouse.sales_targets (month, channel_group, party, category, item_no, sku, measure, target, source) values %s', rows, page_size=1000)
         # the boards read as per-scope roles (birbal_scope_<hash>); the Birbal migration grants too, this is the belt
         cur.execute("select rolname from pg_roles where rolname like 'birbal_scope_%' or rolname = 'birbal_engine'")
@@ -357,23 +438,32 @@ def write_detail(conn, detail):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--source', choices=['marketplace', 'all'], default='all')   # 'all' kept for old callers
+    ap.add_argument('--source', choices=['marketplace', 'trade', 'all'], default='all')
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--token', default=os.environ.get('GOOGLE_TOKEN_JSON', 'token.json'))
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     conn = None if a.dry_run else connect()
+    c = creds(a.token)
     failed = False
-    detail = []
-    rows, months = marketplace_rows(creds(a.token), detail)
-    if a.dry_run:
-        print(f'marketplace: {len(rows)} rows; sample: {rows[:4]}')
-        print(f'detail: {len(detail)} location x SKU lines; sample: {detail[:1]}')
-    elif rows:
-        write(conn, rows, months, ('target', 'target_sku'), 'marketplace')
-        write_detail(conn, detail)
-    else:
-        failed = True
+    if a.source in ('marketplace', 'all'):
+        detail = []
+        rows, months = marketplace_rows(c, detail)
+        if a.dry_run:
+            print(f'marketplace: {len(rows)} rows; sample: {rows[:4]}')
+            print(f'detail: {len(detail)} location x SKU lines; sample: {detail[:1]}')
+        elif rows:
+            write(conn, rows, months, ('target', 'target_sku'), 'marketplace')
+            write_detail(conn, detail)
+        else:
+            failed = True
+    if a.source in ('trade', 'all'):
+        rows, months, bad = trade_rows(c)
+        if a.dry_run:
+            print(f'trade: {len(rows)} rows; channel totals: {[(r[0].isoformat(), r[7]) for r in rows if r[8] == "target"]}')
+        elif rows:
+            write(conn, rows, months, ('target', 'target_party'), 'trade')
+        failed = failed or not rows or bool(bad)
     if conn:
         conn.close()
     sys.exit(1 if failed else 0)

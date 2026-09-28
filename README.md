@@ -63,7 +63,9 @@ beat (`targets` job):
 * **Marketplace** -- every "Target Planning <Month> - <Year>" sheet from April 2026 (found in Drive by
   name; tab `Target`, header row 3): `QTY TGT` and `T - Net Sales` per location x SKU, folded to month x
   party x category (`source='target'`) and kept per SKU (`source='target_sku'`).
-* **Trade** -- not loaded from finance's "Management MIS FY27" sheet (owner's call, 2026-09-28). The only
-  Trade target rows are the Trade parties (DMart, Jio BP, GT) that the planning sheets list.
+* **Trade** -- the Trade team's "Trade Target Planning <Mon>'<yy>" sheets (from Jun'26, shared with instamart@),
+  tab `Target P&L`, line `Net Sales`: the total column as the month's channel-level Trade target
+  (`source='target'`, party NULL -- what the board reads) and each party column as `source='target_party'`.
+  Not finance's "Management MIS FY27" sheet (owner's call, 2026-09-28).
 
 `python targets_loader.py --dry-run` parses the sheets and writes nothing.
