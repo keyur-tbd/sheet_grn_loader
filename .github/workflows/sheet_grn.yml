@@ -79,3 +79,23 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           GOOGLE_TOKEN_JSON: token.json
         run: python targets_loader.py
+
+  # Returns-capping RTV% rates (Birbal migration 036) from the same Target Planning sheets' MRO% tab ->
+  # public.rtv_capping_pct. Replaced the hand-loaded "<Month> RTV%.xlsx" exports on 2026-09-29. The capping
+  # ledger is rebuilt by the o2c_refresh pg_cron beat, not here.
+  capping_rates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Restore the Google token
+        run: echo "${{ secrets.GOOGLE_TOKEN_JSON_B64 }}" | base64 -d > token.json
+      - name: Capping RTV% rates
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          GOOGLE_TOKEN_JSON: token.json
+        run: python capping_rates_loader.py
