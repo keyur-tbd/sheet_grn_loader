@@ -371,7 +371,17 @@ def trade_detail(c, sheets):
     if not sheets:
         log.warning('no "Trade Target Planning <Mon>\'<yy>" sheet visible to %s', account_of(c))
     detail, months, bad = [], set(), []
+    per_month = {}
     for month, sid, name in sheets:
+        per_month.setdefault(month, []).append(f'{name} ({sid})')
+    for month, sid, name in sheets:
+        if len(per_month[month]) > 1:
+            # two sheets for one month would load the target twice: keep the month's last good load until one goes
+            if f'{name} ({sid})' == per_month[month][0]:
+                log.error('%d Trade sheets for %s, month skipped (previous load kept) -- delete or rename all but one: %s',
+                          len(per_month[month]), month.strftime('%b-%y'), '; '.join(per_month[month]))
+            bad.append(name)
+            continue
         try:
             tab, lines = parse_trade(svc, sid, month)
             check = pl_net_sales(svc, sid)
