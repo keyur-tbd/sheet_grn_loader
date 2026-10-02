@@ -70,3 +70,15 @@ beat (`targets` job):
   Marketplace sheets' DMart / Jio BP / GT lines are dropped. Not finance's "Management MIS FY27" sheet.
 
 `python targets_loader.py --dry-run` parses the sheets and writes nothing.
+
+## Field staff cost by store (`staff_salary_loader.py`, 2026-10-02)
+
+Replaces `public.pnl_store_salaries` from the confidential "Salary Detail" sheet
+(`1h9kKr91dLNruatRleBAIUmndTQk8rewhobzvS4Uj7cU`, tab "Salaries promoters Working"), shared with
+**birbal@ only**, so it has its own token: secret `STAFF_SALARY_TOKEN_JSON_B64` (locally
+`D:\Python\Birbal\salary_loader\token_birbal.json`, spreadsheets.readonly). Store grain WITHOUT NAMES:
+the name becomes an HMAC under a key drawn fresh per run (head counts only), whole pay is not stored,
+logs carry counts only. Refuses a read under half the rows already loaded. Then refreshes Birbal's
+`warehouse.store_staff_cost` / `trade_store_month` snapshots (`app.refresh_store_staff()`, migration 133).
+The Feeder File's copy of this tab is no longer synced by marketplace-ads-pipeline (its key folded a
+person's stores into one row).
