@@ -97,5 +97,6 @@ drive.readonly -- the salary token is Sheets-only and cannot list a folder). The
 - `Overall Fixed RTV TOT - Platform wise/`: Platform | Category | RTV % (blank platform = the one above)
   -> `public.rtv_fixed_tot`.
 
-Both tables are replaced on every run; a read under half the support rows already loaded is refused.
+Both tables are replaced on every run, then `app.refresh_rtv_analysis()` rebuilds the board's snapshot
+(migration 142); a read under half the support rows already loaded is refused.
 `python rtv_support_loader.py --dry-run` reads and writes nothing.

@@ -20,7 +20,8 @@ is worked back from the sheet's order -- the last month is the latest such month
 month, and walking up the sheet a month that is later in the year than the one below it belongs to the
 year before. A month cell that carries a year ("Jun-26", "01-06-2026", a date) keeps it.
 
-Every run REPLACES both tables in one transaction (the folder is the whole history). A read with less
+Every run REPLACES both tables in one transaction (the folder is the whole history), then rebuilds Birbal's
+warehouse.rtv_analysis snapshot (app.refresh_rtv_analysis(), migration 142). A read with less
 than half the support rows already loaded is refused rather than written (a half-shared folder).
 
 Environment: SUPABASE_DB_URL (+ SUPABASE_DB_SSLMODE / SUPABASE_DB_SSLROOTCERT),
@@ -363,6 +364,15 @@ def write(conn, support, tot, skipped):
         except Exception as e:                                # noqa: BLE001
             log.warning('workflow_logs not written: %s', str(e)[:100])
     conn.commit()
+    # the board reads warehouse.rtv_analysis as a snapshot (Birbal migration 142); rebuild it now, not in 3 hours
+    try:
+        with conn.cursor() as cur:
+            cur.execute('select app.refresh_rtv_analysis()')
+            log.info('rtv_analysis snapshot: %s', cur.fetchone()[0])
+        conn.commit()
+    except Exception as e:                                    # noqa: BLE001
+        conn.rollback()
+        log.warning('rtv_analysis refresh failed (the 3-hourly beat will catch up): %s', str(e)[:120])
     return before
 
 
