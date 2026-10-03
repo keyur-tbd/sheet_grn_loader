@@ -82,3 +82,20 @@ logs carry counts only. Refuses a read under half the rows already loaded. Then 
 `warehouse.store_staff_cost` / `trade_store_month` snapshots (`app.refresh_store_staff()`, migration 133).
 The Feeder File's copy of this tab is no longer synced by marketplace-ads-pipeline (its key folded a
 person's stores into one row).
+
+## RTV support + fixed TOT % (`rtv_support_loader.py`, 2026-10-03)
+
+For Birbal's RTV Analysis board (`/rtv`, migration 141). Reads the Drive folder "Platform wise RTV Data"
+(`1vlVTGF3biSMxlJox7_OpkhZVuMRkxNRA`, owned by zepto@, shared with birbal@) with birbal@'s **Drive** token:
+secret `RTV_SUPPORT_TOKEN_JSON_B64` (locally `D:\Python\Birbal\salary_loader\token_birbal_drive.json`,
+drive.readonly -- the salary token is Sheets-only and cannot list a folder). The job skips until the secret exists.
+
+- `<Platform>/` sub-folders (Blinkit, Instamart, Zepto, Flipkart): every Google Sheet / .xlsx / .csv, every tab
+  with a Month | Item ID | SKU Name | City | Alignment header -> `public.rtv_support_lines` (product x city x
+  month the partner takes back in full; "100% RTV" = 1.0). Months without a year are dated from the sheet's
+  order (last row = latest such month no later than next month).
+- `Overall Fixed RTV TOT - Platform wise/`: Platform | Category | RTV % (blank platform = the one above)
+  -> `public.rtv_fixed_tot`.
+
+Both tables are replaced on every run; a read under half the support rows already loaded is refused.
+`python rtv_support_loader.py --dry-run` reads and writes nothing.

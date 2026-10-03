@@ -125,3 +125,30 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           STAFF_SALARY_TOKEN_JSON: token_birbal.json
         run: python staff_salary_loader.py
+
+  # Partner RTV support lists + the fixed RTV % in the terms of trade for Birbal's RTV Analysis board
+  # (migration 141), from the "Platform wise RTV Data" Drive folder, which is shared with birbal@: birbal@'s
+  # Drive token (drive.readonly; the salary token above is Sheets-only and cannot list a folder). Skips
+  # quietly until the secret exists.
+  rtv_support:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Restore birbal@'s Drive token
+        id: token
+        env:
+          TOKEN_B64: ${{ secrets.RTV_SUPPORT_TOKEN_JSON_B64 }}
+        run: |
+          if [ -z "$TOKEN_B64" ]; then echo "RTV_SUPPORT_TOKEN_JSON_B64 is not set; skipping"; echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "$TOKEN_B64" | base64 -d > token_birbal_drive.json
+      - name: RTV support + fixed TOT
+        if: steps.token.outputs.skip != '1'
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          RTV_SUPPORT_TOKEN_JSON: token_birbal_drive.json
+        run: python rtv_support_loader.py
