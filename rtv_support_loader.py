@@ -67,14 +67,21 @@ MONTHS = {m: i for i, m in enumerate(
     ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'], 1)}
 
 # header (lower-cased, spaces collapsed) -> field
+# Instamart and Zepto write their own headers (2026-10-04: their folders were still empty), so the usual
+# spellings of each are accepted; '_' counts as a space. Zepto's id may be its numeric SKU code or the EAN --
+# Birbal's rtv_support view (migration 145) matches either, and falls back on the SKU name.
 SUPPORT_HEADERS = {
-    'month': 'month',
+    'month': 'month', 'month name': 'month', 'period': 'month',
     'item id': 'item_id', 'item code': 'item_id', 'sku id': 'item_id', 'sku code': 'item_id', 'product id': 'item_id',
+    'product code': 'item_id', 'article code': 'item_id', 'ean': 'item_id', 'ean code': 'item_id',
+    'zepto sku id': 'item_id', 'zepto sku code': 'item_id', 'swiggy item code': 'item_id', 'instamart item code': 'item_id',
     'sku name': 'sku_name', 'item name': 'sku_name', 'product name': 'sku_name', 'sku': 'sku_name',
-    'city': 'city', 'location': 'city',
+    'product': 'sku_name', 'item': 'sku_name', 'item description': 'sku_name', 'product description': 'sku_name',
+    'city': 'city', 'city name': 'city', 'location': 'city', 'region': 'city',
     'alignment': 'alignment', 'support': 'alignment', 'rtv support': 'alignment', 'rtv %': 'alignment',
+    'dump support': 'alignment', 'support %': 'alignment',
 }
-SUPPORT_NEEDED = {'month', 'item_id', 'city'}
+SUPPORT_NEEDED = {'month', 'city'}            # and an item id or an SKU name (checked in header_row)
 TOT_HEADERS = {'platform': 'platform', 'category': 'category', 'rtv %': 'rtv_pct', 'rtv%': 'rtv_pct', 'fixed rtv %': 'rtv_pct'}
 
 log = logging.getLogger('rtv_support')
@@ -152,10 +159,10 @@ def header_row(rows, headers, needed):
     for i, row in enumerate(rows[:5]):
         idx = {}
         for j, h in enumerate(row):
-            key = norm(h).lower()
+            key = norm(str(h if h is not None else '').replace('_', ' ')).lower()
             if key in headers and headers[key] not in idx:
                 idx[headers[key]] = j
-        if needed <= set(idx):
+        if needed <= set(idx) and (headers is not SUPPORT_HEADERS or 'item_id' in idx or 'sku_name' in idx):
             return i, idx
     return None, None
 
@@ -242,17 +249,19 @@ def read_support(platform, path, f, tabs, today, skipped):
     for tab, grid in tabs:
         hi, idx = header_row(grid, SUPPORT_HEADERS, SUPPORT_NEEDED)
         if hi is None:
-            skipped[f'{path}{f["name"]} / {tab}: no Month + Item ID + City header'] += 1
+            skipped[f'UNREAD {path}{f["name"]} / {tab}: no Month + City + (Item ID or SKU Name) header'] += 1
             continue
         body = []
         for n, row in enumerate(grid[hi + 1:], start=hi + 2):
             cell = lambda k: row[idx[k]] if k in idx and idx[k] < len(row) else None   # noqa: E731
             iid, mon = item_id(cell('item_id')), cell('month')
+            if not iid and norm(cell('sku_name')):
+                iid = 'name:' + norm(cell('sku_name'))         # no id column / cell: Birbal matches it by name
             if not iid and mon in (None, ''):
                 continue                                       # blank line
             mp = month_parts(mon) if mon not in (None, '') else None
             if not iid or mp is None:
-                skipped['incomplete row (no item id or month)'] += 1
+                skipped['incomplete row (no item id / SKU name, or no month)'] += 1
                 continue
             body.append((n, mp, iid, row, cell))
         months = assign_years([b[1] for b in body], today)
@@ -391,6 +400,8 @@ def main():
              ', '.join(f'{p} {m:%b-%y} ({n})' for (p, m), n in sorted(per.items())) or 'none')
     log.info('fixed TOT: %s', ', '.join(f'{r["platform"]} {r["category"]} {"-" if r["rtv_pct"] is None else format(r["rtv_pct"], ".0%")}'
                                         for r in sorted(tot, key=lambda x: (x['platform'], x['category']))) or 'none')
+    for k in [k for k in skipped if k.startswith('UNREAD ')]:
+        log.warning('%s -- rename its columns or tell the Birbal team the new spelling', k)   # a new platform's sheet layout
     if skipped:
         log.info('skipped / folded: %s', '; '.join(f'{k}: {v}' for k, v in skipped.items()))
     if not support and not tot:
