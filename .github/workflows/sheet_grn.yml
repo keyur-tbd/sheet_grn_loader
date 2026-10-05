@@ -152,3 +152,30 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           RTV_SUPPORT_TOKEN_JSON: token_birbal_drive.json
         run: python rtv_support_loader.py
+
+  # Birbal's Expense Analysis board (migration 151): the finance team's Department / Type of Exp / Expense
+  # Month tagging from "Expenses Analysis Report FY27". Same birbal@ Drive token as rtv_support (Drive read
+  # scope also reads Sheets). When finance starts a new monthly file, set EXPENSE_SHEET_ID below.
+  expense_sheet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Restore birbal@'s Drive token
+        id: token
+        env:
+          TOKEN_B64: ${{ secrets.RTV_SUPPORT_TOKEN_JSON_B64 }}
+        run: |
+          if [ -z "$TOKEN_B64" ]; then echo "RTV_SUPPORT_TOKEN_JSON_B64 is not set; skipping"; echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "$TOKEN_B64" | base64 -d > token_birbal_drive.json
+      - name: Expense tagging
+        if: steps.token.outputs.skip != '1'
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          EXPENSE_SHEET_TOKEN_JSON: token_birbal_drive.json
+          # EXPENSE_SHEET_ID: '<new file id>'
+        run: python expense_sheet_loader.py

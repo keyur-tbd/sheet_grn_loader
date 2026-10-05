@@ -100,3 +100,16 @@ drive.readonly -- the salary token is Sheets-only and cannot list a folder). The
 Both tables are replaced on every run, then `app.refresh_rtv_analysis()` rebuilds the board's snapshot
 (migration 142); a read under half the support rows already loaded is refused.
 `python rtv_support_loader.py --dry-run` reads and writes nothing.
+
+## Expense tagging (`expense_sheet_loader.py`, 2026-10-05)
+
+For Birbal's Expense Analysis board (`/expenses`, migration 151). Reads the finance team's Google Sheet
+"Expenses Analysis Report FY27" (`1siBXpxc4R1REY0Oi89BRvwetGrlJ2aSWcFhmM-6iyIg`, shared with birbal@; override
+with `EXPENSE_SHEET_ID` when the team starts a new monthly file) with birbal@'s Drive token (same secret as
+rtv_support). Birbal reads the G/L itself; from the sheet it takes the team's judgement only:
+- `ERP_Raw_Data` -> `public.expense_sheet_lines`: Department, Type of Exp and Expense Month per G/L line
+  (document no. x account x posting date x amount; labels such as "Previous Year" kept as written);
+- `Names & Codes` + `MIS Mapping` -> `public.expense_gl_map` (account -> department, type, MIS heads, provision
+  account) and `public.expense_party_map` (party -> short name, group).
+Every run replaces the three tables; a read with under half the tagged lines already loaded is refused.
+`python expense_sheet_loader.py --dry-run` reads and writes nothing.
