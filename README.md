@@ -111,5 +111,7 @@ rtv_support). Birbal reads the G/L itself; from the sheet it takes the team's ju
   (document no. x account x posting date x amount; labels such as "Previous Year" kept as written);
 - `Names & Codes` + `MIS Mapping` -> `public.expense_gl_map` (account -> department, type, MIS heads, provision
   account) and `public.expense_party_map` (party -> short name, group).
-Every run replaces the three tables; a read with under half the tagged lines already loaded is refused.
+Since Birbal 152 the sheet is a FALLBACK: Birbal dates each line from its own narration / comment and uses the team's
+month only where a line names none. Every run replaces the tagged lines, upserts the two maps (never emptied) and
+rebuilds Birbal's `warehouse.expense_lines` snapshot; a read with under half the tagged lines already loaded is refused.
 `python expense_sheet_loader.py --dry-run` reads and writes nothing.

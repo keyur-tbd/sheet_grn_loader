@@ -15,8 +15,10 @@ Columns are found by their header NAME, so a moved or added column is fine. Birb
 (bc_general_ledger_entries); from the sheet it takes only the team's own judgement: which department and
 head an account belongs to, and which month each line's cost belongs to (see the rules in migration 151).
 
-Every run REPLACES the three tables in one transaction (the sheet is the year to date). A read with less
-than half the tagged lines already loaded is refused rather than written (a half-filled new file).
+Birbal dates every line from its own narration / comment first (migration 152); the team's Expense Month is used
+only for a line whose text names no month. Every run REPLACES the tagged lines and UPSERTS the two maps (never
+emptied), then rebuilds Birbal's warehouse.expense_lines snapshot. A read with less than half the tagged lines
+already loaded is refused rather than written (a half-filled new file).
 
 Environment: SUPABASE_DB_URL (+ SUPABASE_DB_SSLMODE / SUPABASE_DB_SSLROOTCERT), EXPENSE_SHEET_TOKEN_JSON
 (path to birbal@'s Google token, Sheets or Drive read scope; default
@@ -312,13 +314,17 @@ def write(conn, title, lines, gl_map, party_map, skipped):
         cur.execute('delete from public.expense_sheet_lines')
         execute_values(cur, f'insert into public.expense_sheet_lines ({", ".join(L_COLS)}) values %s',
                        [tuple(r[c] for c in L_COLS) for r in lines], page_size=1000)
+        # the maps are UPSERTED, never emptied (Birbal 152): an account or party the sheet stops listing keeps its
+        # last classification, and one added in the database by hand survives the next run
         if gl_map:
-            cur.execute('delete from public.expense_gl_map')
-            execute_values(cur, f'insert into public.expense_gl_map ({", ".join(G_COLS)}) values %s',
+            upd = ', '.join(f'{c} = excluded.{c}' for c in G_COLS if c != 'gl_no')
+            execute_values(cur, f'insert into public.expense_gl_map ({", ".join(G_COLS)}) values %s '
+                                f'on conflict (gl_no) do update set {upd}, loaded_at = now()',
                            [tuple(r[c] for c in G_COLS) for r in gl_map])
         if party_map:
-            cur.execute('delete from public.expense_party_map')
-            execute_values(cur, f'insert into public.expense_party_map ({", ".join(P_COLS)}) values %s',
+            upd = ', '.join(f'{c} = excluded.{c}' for c in P_COLS if c != 'party_key')
+            execute_values(cur, f'insert into public.expense_party_map ({", ".join(P_COLS)}) values %s '
+                                f'on conflict (party_key) do update set {upd}, loaded_at = now()',
                            [tuple(r[c] for c in P_COLS) for r in party_map])
         try:
             months = sorted({(r['expense_month'].isoformat() if r['expense_month'] else r['month_label']) for r in lines})
@@ -332,6 +338,15 @@ def write(conn, title, lines, gl_map, party_map, skipped):
         except Exception as e:                                # noqa: BLE001
             log.warning('workflow_logs not written: %s', str(e)[:100])
     conn.commit()
+    # the board reads warehouse.expense_lines as an hourly snapshot (Birbal 152); rebuild it now, not at :12
+    try:
+        with conn.cursor() as cur:
+            cur.execute('select app.refresh_expense_lines()')
+            log.info('expense_lines snapshot: %s', cur.fetchone()[0])
+        conn.commit()
+    except Exception as e:                                    # noqa: BLE001
+        conn.rollback()
+        log.warning('expense_lines refresh failed (the hourly beat will catch up): %s', str(e)[:120])
     return before
 
 
