@@ -179,3 +179,30 @@ jobs:
           EXPENSE_SHEET_TOKEN_JSON: token_birbal_drive.json
           # EXPENSE_SHEET_ID: '<new file id>'
         run: python expense_sheet_loader.py
+
+  # Birbal's Receivables board (migration 157): the finance team's "Sundry Debtors Ageing Report <Mon>.<yy>" sheet
+  # -- its Customer Master, the cells they type on each weekly tab (DSO, missing invoices, collection aim, PDC,
+  # comments) and the Receivable Adj. Details register. The newest file is found by name on Drive, so a new month
+  # needs no change here. Same birbal@ Drive token as rtv_support.
+  ar_sheet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Restore birbal@'s Drive token
+        id: token
+        env:
+          TOKEN_B64: ${{ secrets.RTV_SUPPORT_TOKEN_JSON_B64 }}
+        run: |
+          if [ -z "$TOKEN_B64" ]; then echo "RTV_SUPPORT_TOKEN_JSON_B64 is not set; skipping"; echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "$TOKEN_B64" | base64 -d > token_birbal_drive.json
+      - name: Receivables sheet
+        if: steps.token.outputs.skip != '1'
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          AR_SHEET_TOKEN_JSON: token_birbal_drive.json
+        run: python ar_sheet_loader.py
