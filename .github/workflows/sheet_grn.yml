@@ -206,3 +206,23 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           AR_SHEET_TOKEN_JSON: token_birbal_drive.json
         run: python ar_sheet_loader.py
+
+  # Shipper carton sizes for Birbal's WIP intercity freight (migration 163) from the logistics team's "Pending POs"
+  # sheet, tab "Carton & MRP". Rewrites wip.ref_carton_size and rebuilds the per-SKU freight only when the sheet
+  # changed. The instamart@ token reads the sheet.
+  carton_size:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Restore the Google token
+        run: echo "${{ secrets.GOOGLE_TOKEN_JSON_B64 }}" | base64 -d > token.json
+      - name: Carton sizes
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          GOOGLE_TOKEN_JSON: token.json
+        run: python carton_size_loader.py
