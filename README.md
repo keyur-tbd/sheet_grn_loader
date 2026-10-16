@@ -6,7 +6,11 @@ Supabase, one table per partner, one row per sheet row, idempotent on `row_hash`
 | source | sheet | table |
 |---|---|---|
 | zepto  | https://docs.google.com/spreadsheets/d/1Txws1Qan9QVyR3qJTlup5BadQ9KwI6qk84KQb8bMbEQ | `public.zepto_grn` |
-| amazon | https://docs.google.com/spreadsheets/d/1IjwfjZg_l9JTiRlosZaNId-QPpfHi48JMH1_Tz8trPo | `public.amazon_grn` |
+| amazon | https://docs.google.com/spreadsheets/d/1IjwfjZg_l9JTiRlosZaNId-QPpfHi48JMH1_Tz8trPo (tab `Amazon`) | `public.amazon_grn` |
+| flipkart_quick | same workbook as amazon, tab `FLIPKART QUICK` (Flipkart Minutes seller-portal PO report, pasted by ops) | `public.flipkart_quick_grn` |
+
+The amazon workbook also has a `Zepto` tab; it is a Sep-Nov 2025 GRN-header snapshot (no SKU) and is NOT read. Zepto
+comes from its own sheet above (PO x SKU, current).
 
 ## One-time setup
 
@@ -24,7 +28,7 @@ Supabase, one table per partner, one row per sheet row, idempotent on `row_hash`
 
 ## Scheduling
 
-`.github/workflows/sheet_grn.yml` runs both sources every 3 hours (`17 */3 * * *` UTC). It does not refresh the
+`.github/workflows/sheet_grn.yml` runs every source every 3 hours (`17 */3 * * *` UTC). It does not refresh the
 order-to-cash bridge: `o2c_refresh` runs on pg_cron at 09:00 and 14:00 IST and picks the new rows up then (a second
 concurrent refresh deadlocks).
 Secrets: `SUPABASE_DB_URL` (session pooler host, runners are IPv4 only) and `GOOGLE_TOKEN_JSON_B64`
@@ -35,7 +39,7 @@ Secrets: `SUPABASE_DB_URL` (session pooler host, runners are IPv4 only) and `GOO
 - Cells are read with `valueRenderOption=UNFORMATTED_VALUE`, so long identifiers never arrive as `3.23E+12`
   (the sheet's CSV export is lossy — do not backfill from a CSV).
 - **Upsert on the line key** (`line_key`: Amazon PO x ASIN, since the sheet's Invoice Number is always blank;
-  Zepto PO x SKU), backed by a unique index `<table>_line_key_uidx` the loader creates if missing:
+  Zepto PO x SKU; Flipkart Quick PO ID x Product ID (FSN)), backed by a unique index `<table>_line_key_uidx` the loader creates if missing:
   - a line in the sheet and in Supabase is replaced by the sheet's version (same `id` and `created_at`, new
     `processed_at`); an unchanged line (same `row_hash`) is not touched;
   - a line only in the sheet is inserted;

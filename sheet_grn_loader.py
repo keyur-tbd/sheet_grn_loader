@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Google Sheet -> Supabase loader for GRN reports that are downloaded from a partner portal
-and pasted into a sheet (Zepto, Amazon Vendor Central). One table per source, one row per
+and pasted into a sheet (Zepto, Amazon Vendor Central, Flipkart Minutes). One table per source, one row per
 sheet row, idempotent on row_hash, so the sheet can be re-read every day.
 
     python sheet_grn_loader.py --source zepto --discover          # print tabs, headers, inferred types, proposed DDL
@@ -76,6 +76,31 @@ SOURCES = {
         # Amazon rewrites a line in place (Confirmed -> Closed, received qty filled in). The load upserts on
         # PO x ASIN: the sheet's current version replaces the stored one; lines only in Supabase are kept.
         'line_key': ('po_number', 'asin'),     # the sheet's Invoice Number column is always blank
+    },
+    # Flipkart Minutes (hyperlocal) seller-portal PO report, pasted by the ops team into a tab of the same workbook as
+    # Amazon (2026-10-16). One row per PO x FSN with ordered / approved / received quantities; the PO ID (FLS...) is our
+    # External_Document_No on C00048 FLIPKART invoices. No invoice number, no GRN date.
+    'flipkart_quick': {
+        'sheet_id': '1IjwfjZg_l9JTiRlosZaNId-QPpfHi48JMH1_Tz8trPo',
+        'table': 'flipkart_quick_grn',
+        'platform': 'Flipkart Quick',
+        'tabs': ['FLIPKART QUICK'],
+        'header_row': 1,
+        'columns': {               # 'NA' cells made most of these look like text
+            'expirydate': ('expiry_date', 'date'), 'orderdate': ('order_date', 'date'), 'hsn': ('hsn', 'text'),
+            'cessvalue': ('cess_value', 'numeric'), 'cancelledquantity': ('cancelled_quantity', 'numeric'), 'cess': ('cess_pct', 'numeric'),
+            'consignmentcreatedquantity': ('consignment_created_quantity', 'numeric'), 'orderedquantity': ('ordered_quantity', 'numeric'),
+            'igst': ('igst_pct', 'numeric'), 'cgstvalue': ('cgst_value', 'numeric'), 'cgst': ('cgst_pct', 'numeric'),
+            'totalgoodsamount': ('total_goods_amount', 'numeric'), 'igstvalue': ('igst_value', 'numeric'), 'approvedquantity': ('approved_quantity', 'numeric'),
+            'surplusquantity': ('surplus_quantity', 'numeric'), 'sgst': ('sgst_pct', 'numeric'), 'sgstvalue': ('sgst_value', 'numeric'),
+            'totalamount': ('total_amount', 'numeric'), 'totaltaxamount': ('total_tax_amount', 'numeric'), 'pendingquantity': ('pending_quantity', 'numeric'),
+            'scheduledquantity': ('scheduled_quantity', 'numeric'), 'receivedquantity': ('received_quantity', 'numeric'),
+            'receivinginprogressquantity': ('receiving_in_progress_quantity', 'numeric'), 'intransitquantity': ('in_transit_quantity', 'numeric'),
+            'rejectedquantity': ('rejected_quantity', 'numeric'), 'absolutecessvalue': ('absolute_cess_value', 'numeric'),
+            'absolutecessperfsnvalue': ('absolute_cess_per_fsn_value', 'numeric'), 'supplierappamount': ('supplier_app_amount', 'numeric'),
+            'suppliermrpamount': ('supplier_mrp_amount', 'numeric'),
+        },
+        'line_key': ('po_id', 'product_id'),   # Product ID = FSN; PO Status moves APPROVED -> CLOSED in place
     },
 }
 BASE_COLUMNS = [  # every table gets these

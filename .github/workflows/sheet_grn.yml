@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       source:
-        description: 'zepto | amazon | all'
+        description: 'zepto | amazon | flipkart_quick | all'
         default: 'all'
 
 # a late scheduled run must not overlap the next one
@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        source: ${{ fromJSON((github.event.inputs.source == '' || github.event.inputs.source == 'all') && '["zepto","amazon"]' || format('["{0}"]', github.event.inputs.source)) }}
+        source: ${{ fromJSON((github.event.inputs.source == '' || github.event.inputs.source == 'all') && '["zepto","amazon","flipkart_quick"]' || format('["{0}"]', github.event.inputs.source)) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
