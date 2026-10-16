@@ -73,6 +73,9 @@ with po as (
          string_agg(distinct nullif(f.item_category, ''), ', ') as categories,
          bool_or(f.is_invoiced) as any_live_invoice,
          bool_or(f.was_reversed) as was_reversed,
+         -- Birbal 183: a PO whose Uniware order was cancelled before anything was billed is
+         -- withdrawn, not owed -- kept off this chase list as it is off the board's default
+         bool_or(f.fulfilment_state = 'UW_CANCELLED') as uw_cancelled,
          string_agg(distinct f.reversed_invoice_nos, ', ') as reversed_invoice_nos,
          string_agg(distinct f.cancellation_memo_nos, ', ') as cancellation_memo_nos,
          string_agg(distinct f.cancellation_kinds, ', ') as cancellation_kinds
@@ -86,6 +89,7 @@ select party, po_number, po_date, (current_date - po_date) as age, case when was
        reversed_invoice_nos, cancellation_memo_nos, cancellation_kinds, source_system
   from po
  where not any_live_invoice and coalesce(uninvoiced_qty, 0) > 0
+   and (was_reversed or not uw_cancelled)
  order by was_reversed, po_qty desc nulls last, po_date
 """
 
