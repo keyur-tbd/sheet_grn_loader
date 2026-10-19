@@ -63,9 +63,17 @@ jobs:
   # Sales targets for the Primary Sales board (Birbal migration 102): the marketing team's monthly
   # "Target Planning <Month> - <Year>" sheets + the Trade team's "Trade Target Planning <Mon>'<yy>" sheets.
   # Not finance's Management MIS: owner's call, 2026-09-28.
+  #
+  # The Sheets API read quota is per minute per USER, and every job on the instamart@ token shares it. With
+  # the three loads, targets, capping_rates and carton_size all starting in the same minute, the heaviest
+  # reader (this one, ~30 reads) hit HTTP 429 on 13 runs between 8 and 19 Oct 2026. So the instamart@ jobs
+  # now run one after another: load -> targets -> capping_rates, and carton_size after load. The loaders
+  # also wait a 429 out (with_retry) instead of dropping the sheet.
   targets:
+    needs: load
+    if: ${{ always() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -82,10 +90,13 @@ jobs:
 
   # Returns-capping RTV% rates (Birbal migration 036) from the same Target Planning sheets' MRO% tab ->
   # public.rtv_capping_pct. Replaced the hand-loaded "<Month> RTV%.xlsx" exports on 2026-09-29. The capping
-  # ledger is rebuilt by the o2c_refresh pg_cron beat, not here.
+  # ledger is rebuilt by the o2c_refresh pg_cron beat, not here. Same token and the same sheets as targets:
+  # runs after it (see the quota note above).
   capping_rates:
+    needs: targets
+    if: ${{ always() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -209,8 +220,10 @@ jobs:
 
   # Shipper carton sizes for Birbal's WIP intercity freight (migration 163) from the logistics team's "Pending POs"
   # sheet, tab "Carton & MRP". Rewrites wip.ref_carton_size and rebuilds the per-SKU freight only when the sheet
-  # changed. The instamart@ token reads the sheet.
+  # changed. The instamart@ token reads the sheet: runs after the loads (see the quota note above).
   carton_size:
+    needs: load
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

@@ -42,6 +42,7 @@ import logging
 import os
 import re
 import sys
+import time
 
 import psycopg2
 from psycopg2.extras import execute_values
@@ -159,15 +160,57 @@ def creds(path):
     return c
 
 
+_account = None
+
+
 def account_of(c):
-    try:
-        return build('drive', 'v3', credentials=c, cache_discovery=False).about().get(fields='user(emailAddress)').execute()['user']['emailAddress']
-    except Exception:                                    # noqa: BLE001
-        return 'the loader account'
+    global _account
+    if _account is None:
+        try:
+            _account = with_retry(lambda: build('drive', 'v3', credentials=c, cache_discovery=False).about().get(fields='user(emailAddress)').execute(),
+                                  'who am I')['user']['emailAddress']
+        except Exception:                                # noqa: BLE001
+            _account = 'the loader account'
+    return _account
+
+
+# The Sheets API read quota is per MINUTE per user, and every job of the sheet-grn-loader workflow that
+# runs on the instamart@ token (the GRN loads, capping rates, carton sizes, this) counts against the same
+# one: a burst from a sibling job shows up here as HTTP 429 on a sheet that read fine a minute earlier
+# (8-19 Oct 2026, 13 red runs). Wait the minute out instead of dropping the sheet.
+RETRY_WAITS = (10, 20, 40, 60, 60)
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+
+
+def with_retry(fn, what):
+    """Run one Google API call, waiting out 429 (quota) and 5xx blips; honours Retry-After when sent."""
+    for attempt, wait in enumerate(RETRY_WAITS + (None,), 1):
+        try:
+            return fn()
+        except HttpError as e:
+            if e.resp.status not in RETRY_STATUSES or wait is None:
+                raise
+            try:
+                wait = max(wait, float(e.resp.get('retry-after') or 0))
+            except ValueError:
+                pass
+            log.warning('%s: HTTP %s, retry %d/%d in %.0fs', what, e.resp.status, attempt, len(RETRY_WAITS), wait)
+            time.sleep(wait)
+
+
+def http_reason(e, c):
+    """What an HttpError means for whoever reads the log (a 429 is NOT a sharing problem)."""
+    status = getattr(getattr(e, 'resp', None), 'status', None)
+    if status in (403, 404):
+        return f'HTTP {status} -- share it with {account_of(c)}'
+    if status == 429:
+        return f'HTTP 429 -- Sheets API read quota still exceeded after {len(RETRY_WAITS)} retries ({sum(RETRY_WAITS)}s)'
+    return f'HTTP {status}: {str(e)[:160]}'
 
 
 def values(svc, sheet_id, rng):
-    return svc.spreadsheets().values().get(spreadsheetId=sheet_id, range=rng, valueRenderOption='UNFORMATTED_VALUE').execute().get('values', [])
+    return with_retry(lambda: svc.spreadsheets().values().get(spreadsheetId=sheet_id, range=rng, valueRenderOption='UNFORMATTED_VALUE').execute(),
+                      f'{sheet_id} {rng}').get('values', [])
 
 
 # ------------------------------------------------------------------ marketplace
@@ -176,8 +219,9 @@ def find_target_planning_sheets(c):
     q = "name contains 'Target Planning' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"
     found, page = [], None
     while True:
-        r = drive.files().list(q=q, fields='nextPageToken, files(id, name, modifiedTime)', pageSize=200, pageToken=page,
-                               includeItemsFromAllDrives=True, supportsAllDrives=True, corpora='allDrives').execute()
+        r = with_retry(lambda: drive.files().list(q=q, fields='nextPageToken, files(id, name, modifiedTime)', pageSize=200, pageToken=page,
+                                                  includeItemsFromAllDrives=True, supportsAllDrives=True, corpora='allDrives').execute(),
+                       'Drive: Target Planning sheets')
         found += r.get('files', [])
         page = r.get('nextPageToken')
         if not page:
@@ -222,7 +266,7 @@ def parse_marketplace(svc, sheet_id, month, detail=None):
         if hdr_month != month:
             log.warning('%s: QTY TGT header says %s, sheet name says %s; using the header', sheet_id, hdr_month, month)
             month = hdr_month
-    rows, start, page = [], 4, 2000
+    rows, start, page = [], 4, 10000          # one read per sheet for today's 4-6k lines (was 3-4 of 2000)
     while True:
         vals = values(svc, sheet_id, f"'Target'!{start}:{start + page - 1}")
         if not vals:
@@ -276,7 +320,7 @@ def marketplace_rows(c, detail_out=None, trade_months=frozenset()):
                     d['month'] = month
                 detail_out.extend(det)
         except HttpError as e:
-            log.error('%s (%s): HTTP %s -- share it with %s', name, sid, e.resp.status, account_of(c))
+            log.error('%s (%s): %s', name, sid, http_reason(e, c))
             continue
         agg, agg_sku = {}, {}
         for party, cat, sku, q, v in lines:
@@ -300,8 +344,9 @@ def marketplace_rows(c, detail_out=None, trade_months=frozenset()):
 def find_trade_planning_sheets(c):
     drive = build('drive', 'v3', credentials=c, cache_discovery=False)
     q = "name contains 'Trade Target Planning' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"
-    r = drive.files().list(q=q, fields='files(id, name)', pageSize=200,
-                           includeItemsFromAllDrives=True, supportsAllDrives=True, corpora='allDrives').execute()
+    r = with_retry(lambda: drive.files().list(q=q, fields='files(id, name)', pageSize=200,
+                                              includeItemsFromAllDrives=True, supportsAllDrives=True, corpora='allDrives').execute(),
+                   'Drive: Trade Target Planning sheets')
     by3 = {k[:3]: v for k, v in MONTHS.items()}
     out = []
     for f in r.get('files', []):
@@ -328,7 +373,8 @@ def pl_net_sales(svc, sheet_id):
 
 def parse_trade(svc, sheet_id, month):
     """One dict per store x item line of the `<Mon> TGT` tab (lines with no quantity and no value are left out)."""
-    tabs = [x['properties']['title'] for x in svc.spreadsheets().get(spreadsheetId=sheet_id, fields='sheets(properties(title))').execute()['sheets']]
+    meta = with_retry(lambda: svc.spreadsheets().get(spreadsheetId=sheet_id, fields='sheets(properties(title))').execute(), f'{sheet_id} tabs')
+    tabs = [x['properties']['title'] for x in meta['sheets']]
     tab = next((x for x in tabs if re.fullmatch(r'[A-Za-z]+ TGT', x.strip()) and x.strip().upper() != 'PARTY TGT'), None)
     if tab is None:
         raise ValueError(f'no "<Mon> TGT" tab (tabs: {tabs})')
@@ -386,8 +432,7 @@ def trade_detail(c, sheets):
             tab, lines = parse_trade(svc, sid, month)
             check = pl_net_sales(svc, sid)
         except (HttpError, ValueError) as e:
-            status = getattr(getattr(e, 'resp', None), 'status', None)
-            log.error('%s (%s): %s', name, sid, f'HTTP {status} -- share it with {account_of(c)}' if status else e)
+            log.error('%s (%s): %s', name, sid, http_reason(e, c) if isinstance(e, HttpError) else e)
             bad.append(name)
             continue
         if not lines:
