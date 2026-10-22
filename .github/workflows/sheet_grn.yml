@@ -239,3 +239,26 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           GOOGLE_TOKEN_JSON: token.json
         run: python carton_size_loader.py
+
+  # Customer complaints for Birbal's Complaints board (migration 204): the customer-care team's "Query/Complaint Tracker"
+  # sheet -- every month tab and the "FoSCoS - Open complaints" tab -> public.crm_complaints + crm_foscos_complaints.
+  # Two Sheets reads a run (the tab list, one batchGet). No customer name or number is read or stored. The instamart@
+  # token reads the sheet: runs after carton_size, one instamart@ job at a time (see the quota note above).
+  complaints:
+    needs: carton_size
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Restore the Google token
+        run: echo "${{ secrets.GOOGLE_TOKEN_JSON_B64 }}" | base64 -d > token.json
+      - name: Customer complaints
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          GOOGLE_TOKEN_JSON: token.json
+        run: python complaints_loader.py
