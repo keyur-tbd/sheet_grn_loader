@@ -87,6 +87,21 @@ logs carry counts only. Refuses a read under half the rows already loaded. Then 
 The Feeder File's copy of this tab is no longer synced by marketplace-ads-pipeline (its key folded a
 person's stores into one row).
 
+## Product COGS (`cogs_sheet_loader.py`, 2026-10-28)
+
+The costing team's "Product COGS w/o tax" sheet (`1f8FxpGdaw-CdpCxEUZPa0e141as8A03xTvlSvLFtCNQ`), one tab per month
+(`October'26 w/o tax`: BC Item Code | City | Item | Category | RM | Packaging | RM + Pkg | Factory Overheads | Cost
+Price) -> `public.cogs_rm_pm` (Birbal migration 223 adds `item_no`). It replaces the hand-exported `COGS Data.xlsx`.
+
+- Each run loads the **newest two** month tabs (the team revises last month); `--months 2026-04,2026-05` for others.
+- Blank City = the national rate (`ALL`); pm = Packaging (it includes the carton), carton_cost = 0; item_no = the code.
+- A row not costed yet (blank / zero / `#REF!`) is skipped and the table keeps what it had; for every product the sheet
+  does cost, that month's rows for it are replaced. Nothing is written when the sheet has not moved.
+- Category = the product's last MIS category in the table; a TG (bought-in) item always reads `OUTSOURCED ...`, since
+  v_cogs_rate adds factory overheads to outsourced items only.
+- birbal@'s Sheets token (`STAFF_SALARY_TOKEN_JSON_B64`, job `cogs_sheet`, after `staff_salary`). The P&L reads the
+  rates through `public.cogs_refresh()` on the o2c beat; `--refresh` runs it straight after a load.
+
 ## RTV support + fixed TOT % (`rtv_support_loader.py`, 2026-10-03)
 
 For Birbal's RTV Analysis board (`/rtv`, migration 141). Reads the Drive folder "Platform wise RTV Data"
