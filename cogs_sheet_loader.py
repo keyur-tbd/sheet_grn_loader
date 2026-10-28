@@ -8,7 +8,9 @@ tabs (--months to load others). It replaces the hand-exported "COGS Data.xlsx" (
 
 Birbal migration 223 owns the item_no column; migration 039 the table. What a row becomes:
   * item_no = the BC item code (FG/xxxx, TG/xxxx) -- v_cogs_rate prefers it to matching the product by name;
-  * city = the sheet's City, blank = 'ALL' (the national rate; per-city rows win over it);
+  * city = the sheet's City. A blank City is the national rate: it is stored as 'ALL' AND written out to every
+    COGS city that has no row of its own for the product, because v_mis_sales and v_yield_loss_lines match a rate
+    on the city alone (only v_sales_cogs_lines falls back to 'ALL'); the cities are the ones the table already uses;
   * rm = RM, pm = Packaging (it already includes the carton), carton_cost = 0, fo = Factory Overheads;
   * category = the MIS category the product last had in the table (TG items are bought in, so theirs always reads
     OUTSOURCED ...: v_cogs_rate adds FO to the cost of outsourced items only), else the sheet's own Category.
@@ -180,6 +182,16 @@ def categorise(rows, known):
 COLS = ['month', 'city', 'sku', 'category', 'rm', 'pm', 'carton_cost', 'fo', 'item_no', 'source_file']
 
 
+def spread_national(rows, cities):
+    """A blank-City ('ALL') rate also becomes the rate of every city the product has no row of its own for."""
+    own = {(r['city'], r['sku']) for r in rows}
+    out = list(rows)
+    for r in rows:
+        if r['city'] == 'ALL':
+            out += [dict(r, city=c) for c in cities if (c, r['sku']) not in own]
+    return out
+
+
 def load_month(cur, month, title, rows, dry):
     cur.execute("""select city, sku, rm::float8, pm::float8, coalesce(carton_cost, 0)::float8, fo::float8
                      from public.cogs_rm_pm where month = %s""", (month,))
@@ -238,9 +250,11 @@ def main():
             cur.execute("""select distinct on (sku) sku, category from public.cogs_rm_pm
                             where category is not null order by sku, month desc""")
             known = dict(cur.fetchall())
+            cur.execute("select distinct city from public.cogs_rm_pm where city <> 'ALL' and city is not null")
+            cities = sorted(c for (c,) in cur.fetchall())
             for m, title, rows in work:
                 categorise(rows, known)
-                total += load_month(cur, m, title, rows, args.dry_run)
+                total += load_month(cur, m, title, spread_national(rows, cities), args.dry_run)
             if not args.dry_run:
                 try:
                     cur.execute("select 1 from information_schema.tables where table_schema='public' and table_name='workflow_logs'")
