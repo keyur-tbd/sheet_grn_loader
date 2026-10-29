@@ -1,6 +1,7 @@
 """Open the Intercity Logistics Tracker with birbal@'s token; dump every tab (UNFORMATTED) to JSON.
 A 429 (per-user read quota, shared with the other birbal@ jobs) is waited out, never read as a sharing problem."""
 import json
+import os
 import time
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -21,7 +22,7 @@ for t in TOKENS:
     except Exception as e:
         print("no:", t.split("/")[-2], str(e)[:90])
         continue
-    print("opened with", t.split("/")[-2], "-", meta["properties"]["title"])
+    print("opened with", os.path.basename(t), "-", meta["properties"]["title"])
     out = {}
     for s in meta["sheets"]:
         p = s["properties"]
