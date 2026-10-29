@@ -92,13 +92,13 @@ print(json.dumps({k: out[k] for k in ("kpi", "levers", "size_q", "bands", "lanes
 
 # Excel backup
 with pd.ExcelWriter(EXCEL, engine="openpyxl") as xw:
-    pd.DataFrame(levers).to_excel(xw, "Levers", index=False)
-    b[["carrier", "lane", "bill_size", "lr", "lr_date", "month", "billed", "card", "over_card", "status", "src"]].sort_values(["month", "lane"]).to_excel(xw, "Bills vs rate card", index=False)
-    pd.DataFrame(rec).to_excel(xw, "Month reconciliation", index=False)
-    u[["lane", "carrier", "dispatch", "month", "lr", "vehicle", "size", "cartons", "boxes", "cap", "util", "rate", "empty_cost", "fit_size", "fit_rate", "rs_saving", "billed", "bill_size"]].sort_values(["lane", "dispatch"]).to_excel(xw, "Trucks (utilisation)", index=False)
-    mg.to_excel(xw, "Merge candidates", index=False)
-    pd.DataFrame(out["lanes"]).to_excel(xw, "Lanes", index=False)
-    qt.to_excel(xw, "Vendor quotes Jul26-Dec27", index=False)
+    pd.DataFrame(levers).to_excel(xw, sheet_name="Levers", index=False)
+    b[["carrier", "lane", "bill_size", "lr", "lr_date", "month", "billed", "card", "over_card", "status", "src"]].sort_values(["month", "lane"]).to_excel(xw, sheet_name="Bills vs rate card", index=False)
+    pd.DataFrame(rec).to_excel(xw, sheet_name="Month reconciliation", index=False)
+    u[["lane", "carrier", "dispatch", "month", "lr", "vehicle", "size", "cartons", "boxes", "cap", "util", "rate", "empty_cost", "fit_size", "fit_rate", "rs_saving", "billed", "bill_size"]].sort_values(["lane", "dispatch"]).to_excel(xw, sheet_name="Trucks (utilisation)", index=False)
+    mg.to_excel(xw, sheet_name="Merge candidates", index=False)
+    pd.DataFrame(out["lanes"]).to_excel(xw, sheet_name="Lanes", index=False)
+    qt.to_excel(xw, sheet_name="Vendor quotes Jul26-Dec27", index=False)
 print("excel ok")
 
 # the cleaned copy the next steps read (NaN -> null)

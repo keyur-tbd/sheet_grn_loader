@@ -21,7 +21,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r requirements.txt pandas
+      # pandas pinned to the laptop's version: the review scripts were written on pandas 2
+      - run: pip install -r requirements.txt "pandas==2.3.3"
       # The tracker is shared with birbal@: the same token secret as staff_salary / cogs_sheet in sheet_grn.yml.
       - name: Restore birbal@'s Google token
         env:

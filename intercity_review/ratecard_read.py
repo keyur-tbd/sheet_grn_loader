@@ -20,7 +20,7 @@ for t in TOKENS:
         svc = build("sheets", "v4", credentials=creds)
         meta = svc.spreadsheets().get(spreadsheetId=SHEET, fields="properties.title,sheets.properties").execute()
     except Exception as e:
-        print("no:", t.split("/")[-2], str(e)[:90])
+        print("no:", os.path.basename(t), str(e)[:90])
         continue
     print("opened with", os.path.basename(t), "-", meta["properties"]["title"])
     out = {}
