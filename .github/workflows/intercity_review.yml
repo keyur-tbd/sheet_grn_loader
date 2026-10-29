@@ -1,0 +1,38 @@
+name: Intercity freight review
+
+# Rebuilds Birbal's WIP "Freight review" (wip.intercity_review) once a day: re-reads the Intercity Logistics Tracker,
+# the ERP transfers and the intercity bills, fills trucks by volume (Birbal migrations 215, 216, 232), and publishes.
+# 21:05 UTC = 02:35 IST. GitHub crons can start late; the review covers April 2026 to the last complete month.
+on:
+  schedule:
+    - cron: '5 21 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: intercity-review
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pandas
+      # The tracker is shared with birbal@: the same token secret as staff_salary / cogs_sheet in sheet_grn.yml.
+      - name: Restore birbal@'s Google token
+        env:
+          TOKEN_B64: ${{ secrets.STAFF_SALARY_TOKEN_JSON_B64 }}
+        run: |
+          if [ -z "$TOKEN_B64" ]; then echo "STAFF_SALARY_TOKEN_JSON_B64 is not set"; exit 1; fi
+          echo "$TOKEN_B64" | base64 -d > intercity_review/token_birbal.json
+      # Output stays on the runner (public repo): the log shows only step names and pass / fail.
+      - name: Rebuild and publish the review
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          ICL_TOKEN_JSON: token_birbal.json
+        working-directory: intercity_review
+        run: python run_all.py
