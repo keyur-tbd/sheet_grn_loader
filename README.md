@@ -102,6 +102,17 @@ Price) -> `public.cogs_rm_pm` (Birbal migration 223 adds `item_no`). It replaces
 - birbal@'s Sheets token (`STAFF_SALARY_TOKEN_JSON_B64`, job `cogs_sheet`, after `staff_salary`). The P&L reads the
   rates through `public.cogs_refresh()` on the o2c beat; `--refresh` runs it straight after a load.
 
+## Cancellation reasons (`cancel_reason_loader.py`, 2026-10-30)
+
+The warehouse team's "All WH Cancellation Data April 2026. March 2027" sheet
+(`1MHVWYAddQLJq3GnH2VhyPkwJyvAXFuEyRteRt_ckPOc`), tab **Master Data** (Wh | PO Number | CN DTAE | OLD INVOICE NUMBER |
+... | Reason Category | CANCEL REMARKS | Approver's Nam) -> `public.o2c_cancel_reasons` (Birbal migration 236), shown on
+SCM > RTV > Cancellations by the cancelled invoice number.
+
+- The whole tab replaces the table, written only when it moved; under 200 rows read is refused (a cleared tab).
+- An invoice typed twice keeps the later row; bu_code comes from the invoice prefix (Wh is sometimes mistyped).
+- birbal@'s Sheets token (`STAFF_SALARY_TOKEN_JSON_B64`, job `cancel_reasons`, after `cogs_sheet`).
+
 ## RTV support + fixed TOT % (`rtv_support_loader.py`, 2026-10-03)
 
 For Birbal's RTV Analysis board (`/rtv`, migration 141). Reads the Drive folder "Platform wise RTV Data"
