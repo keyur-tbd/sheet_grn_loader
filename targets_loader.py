@@ -371,8 +371,39 @@ def pl_net_sales(svc, sheet_id):
     return num(net[c_total]) if c_total is not None and c_total < len(net) else None
 
 
+# the `Target P&L` tab's rows -> sales_targets_detail columns (each = the `<Mon> TGT` ladder column of the same total)
+PL_LADDER = {
+    'GMV': 'mrp_billing', 'GROSS BILLING': 'gross_billing', 'LESS RETURNS': 'rtv', 'GROSS SALES': 'consumer_sales',
+    'LESS GST': 'tax', 'NET SALES': 'net_sales', 'COGS': 'cogs', 'GROSS MARGIN': 'gm', 'OFFERS': 'discounts', 'OFF INVOICE': 'off_invoice',
+}
+
+
+def pl_by_party(svc, sheet_id):
+    """The `Target P&L` tab per party column: {PARTY: {detail column: value}}."""
+    grid = values(svc, sheet_id, "'Target P&L'!A1:BZ80")
+    hi = next((i for i, r in enumerate(grid) if r and str(r[0]).strip().upper().startswith('CHANNEL P&L')), None)
+    if hi is None:
+        raise ValueError('Target P&L: no "Channel P&L" header row')
+    parties = [re.sub(r'\s+', ' ', str(h)).strip().upper() for h in grid[hi]]
+    out = {p: {} for p in parties[1:] if p and not p.startswith('TOTAL')}
+    for r in grid[hi + 1:]:
+        label = re.sub(r'\s+', ' ', str(r[0] if r else '')).strip().upper()
+        col = PL_LADDER.get(label)
+        if label.startswith('DISCOUNTS'):
+            col = 'partner_margin'
+        if not col:
+            continue
+        for i, p in enumerate(parties):
+            if p in out and i < len(r):
+                out[p].setdefault(col, num(r[i]) or 0.0)       # first row of each label (the % rows below are skipped)
+    return out
+
+
 def parse_trade(svc, sheet_id, month):
-    """One dict per store x item line of the `<Mon> TGT` tab (lines with no quantity and no value are left out)."""
+    """One dict per store x item line of the `<Mon> TGT` tab (lines with no quantity and no value are left out).
+
+    May'26's tab stops at `May TGT` (the line's sales target) and `May Qty`, with no ladder: there each party's
+    `Target P&L` column is spread over its lines by their share of `<Mon> TGT`, so the lines still add up to the P&L."""
     meta = with_retry(lambda: svc.spreadsheets().get(spreadsheetId=sheet_id, fields='sheets(properties(title))').execute(), f'{sheet_id} tabs')
     tabs = [x['properties']['title'] for x in meta['sheets']]
     tab = next((x for x in tabs if re.fullmatch(r'[A-Za-z]+ TGT', x.strip()) and x.strip().upper() != 'PARTY TGT'), None)
@@ -386,12 +417,17 @@ def parse_trade(svc, sheet_id, month):
     first = {}
     for i, h in enumerate(headers):
         first.setdefault(h, i)
-    need = {k: first.get(k) for k in ('PARTY', 'NAME', 'CITY', 'CATEGORY', 'ITEM NAME', 'NET SALES TGT')}
-    c_qty = next((i for i, h in enumerate(headers) if h.endswith('NET SALES QTY')), None)
+    mon = tab.strip().upper()[:-4]
+    short = 'NET SALES TGT' not in first and tab.strip().upper() in first and f'{mon} QTY' in first
+    need = {k: first.get(k) for k in ('PARTY', 'NAME', 'CITY', 'CATEGORY', 'ITEM NAME') + (() if short else ('NET SALES TGT',))}
+    if short:
+        c_qty, c_weight = first[f'{mon} QTY'], first[tab.strip().upper()]
+    else:
+        c_qty = next((i for i, h in enumerate(headers) if h.endswith('NET SALES QTY')), None)
     missing = [k for k, v in need.items() if v is None] + (['<Mon> Net Sales Qty'] if c_qty is None else [])
     if missing:
         raise ValueError(f'{tab}: no {", ".join(missing)} column (headers: {headers[:12]}...)')
-    ladder = {first[h]: col for h, col in TRADE_LADDER.items() if h in first}
+    ladder = {} if short else {first[h]: col for h, col in TRADE_LADDER.items() if h in first}
     out = []
     for r in grid[hi + 1:]:
         r = list(r) + [''] * (len(headers) - len(r))
@@ -406,9 +442,28 @@ def parse_trade(svc, sheet_id, month):
              'parent_sku': None, 'category': title(str(r[need['CATEGORY']]).strip()) or '(none)', 'qty': q}
         for i, col in ladder.items():
             d[col] = num(r[i]) or 0.0
-        if not q and not d.get('net_sales'):
+        if short:
+            d['_w'] = num(r[c_weight]) or 0.0
+            if not q and not d['_w']:
+                continue
+        elif not q and not d.get('net_sales'):
             continue
         out.append(d)
+    if short:
+        pl = pl_by_party(svc, sheet_id)
+        weight = {}
+        for d in out:
+            weight[d['platform_raw'].upper()] = weight.get(d['platform_raw'].upper(), 0.0) + d['_w']
+        for p in sorted(set(weight) - set(pl)):
+            log.warning('%s: party %s has lines but no Target P&L column, its value left at 0', tab, p)
+        for p in sorted(p for p, v in pl.items() if v.get('net_sales') and not weight.get(p)):
+            log.warning('%s: Target P&L party %s (Rs %.2f L) has no line with a %s value', tab, p, pl[p]['net_sales'] / 1e5, tab)
+        for d in out:
+            key, w = d['platform_raw'].upper(), d.pop('_w')
+            share = w / weight[key] if weight.get(key) else 0.0
+            for col, v in pl.get(key, {}).items():
+                d[col] = v * share
+        log.info('%s: no ladder columns, Target P&L spread by %s share', tab, tab)
     return tab, out
 
 
