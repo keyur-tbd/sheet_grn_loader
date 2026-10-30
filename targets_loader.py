@@ -87,7 +87,7 @@ DETAIL_COLS = ['month', 'channel_group', 'party', 'platform_raw', 'location', 'c
 # parties the business counts as Trade even where the marketing plan lists them (Birbal migration 108)
 TRADE_PARTIES = {'DMart', 'Jio BP', 'GT'}
 # the Trade sheets' spellings party_of() would title-case wrongly
-TRADE_PARTY = {'JIO BP': 'Jio BP', 'GT': 'GT', 'NB': 'NB', 'METRO C&C': 'Metro C&C', 'M.K. RETAIL': 'M.K. Retail'}
+TRADE_PARTY = {'JIO BP': 'Jio BP', 'GT': 'GT', 'NB': 'NB', 'METRO C&C': 'Metro C&C', 'M.K. RETAIL': 'M.K. Retail', 'KPKB': 'KPKB'}
 # the `<Mon> TGT` tab's ladder columns -> sales_targets_detail columns (first occurrence of each header)
 TRADE_LADDER = {
     'MRP SUPPLY TGT': 'mrp_billing', 'COMMSISON TGT': 'partner_margin', 'COMMISSION TGT': 'partner_margin',
