@@ -217,9 +217,11 @@ def weekly_header(row):
 
 
 def read_weekly(g, tab, as_on, sid):
-    hi = next((i for i, r in enumerate(g[:10]) if {'customer_group', 'party_name', 'receivable'} <= set(weekly_header(r)[0])), None)
+    # Party Name is only a label (Birbal shows the ERP customers when it is blank): from 26.10.26 the team replaced it
+    # with a Brand Name column (Channel, Brand Name, Customer Group, ...), so only Customer Group + Receivable are required
+    hi = next((i for i, r in enumerate(g[:10]) if {'customer_group', 'receivable'} <= set(weekly_header(r)[0])), None)
     if hi is None:
-        raise SystemExit(f'{tab}: no header row with Customer Group, Party Name and Receivable amount')
+        raise SystemExit(f'{tab}: no header row with Customer Group and Receivable amount')
     idx, comments = weekly_header(g[hi])
     aim_label = norm(g[hi][idx['collection_aim_l']]) if 'collection_aim_l' in idx else None
     out, seen = [], set()
