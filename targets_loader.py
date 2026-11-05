@@ -44,6 +44,7 @@ import re
 import sys
 import time
 
+import httplib2
 import psycopg2
 from psycopg2.extras import execute_values
 from google.oauth2.credentials import Credentials
@@ -183,7 +184,7 @@ RETRY_STATUSES = (429, 500, 502, 503, 504)
 
 
 def with_retry(fn, what):
-    """Run one Google API call, waiting out 429 (quota) and 5xx blips; honours Retry-After when sent."""
+    """Run one Google API call, waiting out 429 (quota), 5xx blips and read timeouts; honours Retry-After when sent."""
     for attempt, wait in enumerate(RETRY_WAITS + (None,), 1):
         try:
             return fn()
@@ -195,6 +196,11 @@ def with_retry(fn, what):
             except ValueError:
                 pass
             log.warning('%s: HTTP %s, retry %d/%d in %.0fs', what, e.resp.status, attempt, len(RETRY_WAITS), wait)
+            time.sleep(wait)
+        except (TimeoutError, ConnectionError, httplib2.HttpLib2Error) as e:   # no HTTP status: a dropped or slow read
+            if wait is None:
+                raise
+            log.warning('%s: %s, retry %d/%d in %.0fs', what, type(e).__name__, attempt, len(RETRY_WAITS), wait)
             time.sleep(wait)
 
 
