@@ -31,6 +31,7 @@ import time
 
 import psycopg2
 from psycopg2.extras import execute_values
+from ddl_guard import ensure_ddl
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
@@ -312,7 +313,7 @@ def ensure_line_key_index(src, conn):
     """The unique index the upsert's ON CONFLICT resolves against (idempotent)."""
     t, key = src['table'], src['line_key']
     with conn.cursor() as cur:
-        cur.execute(f"create unique index if not exists {t}_line_key_uidx on public.{t} ({', '.join(key)}) nulls not distinct")
+        ensure_ddl(cur, f"create unique index if not exists {t}_line_key_uidx on public.{t} ({', '.join(key)}) nulls not distinct")
     conn.commit()
 
 

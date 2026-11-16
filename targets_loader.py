@@ -47,6 +47,7 @@ import time
 import httplib2
 import psycopg2
 from psycopg2.extras import execute_values
+from ddl_guard import ensure_ddl
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
@@ -523,7 +524,7 @@ def write(conn, rows, months, sources, label):
         log.warning('%s: nothing to write', label)
         return 0
     with conn.cursor() as cur:
-        cur.execute(DDL)
+        ensure_ddl(cur, DDL)
         # replace exactly the (source, channel, month, party-level?) slices this run read -- both runs write
         # source='target' Trade rows (Marketplace: DMart / Jio BP / GT per party; Trade: the channel total,
         # party NULL) and must not wipe each other
@@ -572,7 +573,7 @@ def write_detail(conn, detail, plan):
     rows = [tuple({'channel_group': grp(d), 'source': 'target', 'item_no': None, 'plan': plan}[c]
                   if c in ('channel_group', 'source', 'item_no', 'plan') else d.get(c) for c in cols) for d in detail]
     with conn.cursor() as cur:
-        cur.execute(DETAIL_DDL)
+        ensure_ddl(cur, DETAIL_DDL)
         cur.execute('delete from warehouse.sales_targets_detail where source = %s and plan = %s and month = any(%s)', ('target', plan, months))
         if plan == 'trade':
             # a month with a Trade sheet takes its Trade target from there only
@@ -614,7 +615,7 @@ def write_trade_targets(conn, months):
     category (source='target', what the boards read) and SKU (source='target_sku'), units and value."""
     months = sorted(months)
     with conn.cursor() as cur:
-        cur.execute(DDL)
+        ensure_ddl(cur, DDL)
         cur.execute("delete from warehouse.sales_targets where channel_group = 'Trade' and month = any(%s) and source in ('target', 'target_sku', 'target_party')", (months,))
         cur.execute("""
             with d as (select month, party, category, sku_name, sum(qty) as q, sum(net_sales) as v
