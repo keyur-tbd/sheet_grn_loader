@@ -4,7 +4,7 @@
     python carton_size_loader.py              # rewrite the table when the sheet changed, then rebuild intercity freight
     python carton_size_loader.py --dry-run    # parse and compare, write nothing
 
-The "Carton & MRP" tab (Item Code | Item Name | Current MRP | CATEGORY | CARTON SIZE) holds the box that goes on
+The "Carton & MRP" tab (Item Code or Item No | Item Name | Current MRP | CATEGORY | CARTON SIZE) holds the box that goes on
 the truck: ERP transfer units divided by it give back the boxes the warehouses log, dispatch by dispatch. Birbal
 splits each warehouse-month's intercity freight over SKUs by those cases, so an edited carton size moves the
 per-SKU figures; app.refresh_intercity_freight() rebuilds them (under a second) only when something changed.
@@ -32,8 +32,9 @@ log = logging.getLogger('carton_size')
 
 SHEET_ID = os.environ.get('CARTON_SHEET_ID', '1i1VnYly-QEExfqwYldnxFh8ZRSkJqm4rpfsw1V8-pAU')
 TAB = 'Carton & MRP'
-COLS = {'item code': 'item_no', 'item name': 'item_name', 'current mrp': 'mrp', 'category': 'category',
-        'carton size': 'carton_size'}
+COLS = {'item code': 'item_no', 'item no': 'item_no', 'item no.': 'item_no', 'item name': 'item_name',
+        'current mrp': 'mrp', 'category': 'category', 'carton size': 'carton_size'}
+HEADER = {v: k for k, v in reversed(list(COLS.items()))}   # internal name -> the heading the sheet should carry
 MIN_ROWS = 50                                # the tab had 105 items on 2026-10-08
 
 
@@ -45,7 +46,8 @@ def read_sheet(svc):
     idx = {COLS[h]: i for i, h in enumerate(hdr) if h in COLS}
     missing = sorted(set(COLS.values()) - set(idx))
     if missing:
-        raise ValueError(f'{TAB}: headers changed, cannot find {missing} (saw {hdr})')
+        want = [HEADER[m].title() for m in missing]
+        raise ValueError(f'{TAB}: headers changed, cannot find a column headed {want} (saw {hdr})')
     rows = {}
     for r in grid[1:]:
         r = list(r) + [''] * (len(hdr) - len(r))
